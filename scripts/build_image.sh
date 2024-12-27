@@ -84,7 +84,12 @@ if [[ "${DOCKER_IMAGE}" == *"/"* ]]; then
 
   # A populated DOCKER_USERNAME env var triggers login
   if [[ -n "${DOCKER_USERNAME:-}" ]]; then
-    echo "$DOCKER_PASS" | docker login --username "$DOCKER_USERNAME" --password-stdin
+    # Add check for GHCR registry
+    if [[ "${DOCKER_IMAGE}" == "ghcr.io/"* ]]; then
+      echo "$DOCKER_PASS" | docker login ghcr.io --username "$DOCKER_USERNAME" --password-stdin
+    else
+      echo "$DOCKER_PASS" | docker login --username "$DOCKER_USERNAME" --password-stdin
+    fi
   fi
 else
   # Build a single-arch image since the image name does not include a slash which
