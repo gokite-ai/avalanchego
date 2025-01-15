@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"time"
 
@@ -36,7 +37,13 @@ const (
 var (
 	_ PathAdder = readPathAdder{}
 	_ Server    = (*server)(nil)
+
+	KITE_CHAIN_ID = ""
 )
+
+func init() {
+	KITE_CHAIN_ID = os.Getenv("KITE_CHAIN_ID")
+}
 
 type PathAdder interface {
 	// AddRoute registers a route to a handler.
@@ -218,6 +225,20 @@ func (s *server) addChainRoute(chainName string, handler http.Handler, ctx *snow
 		zap.String("endpoint", endpoint),
 	)
 	handler = s.wrapMiddleware(chainName, handler, ctx)
+
+	if KITE_CHAIN_ID != "" && url == "/ext/bc/"+KITE_CHAIN_ID {
+		err := s.router.AddRouter("/ext/bc/kite", endpoint, handler)
+		s.log.Info(fmt.Sprintf("added router /ext/bc/kite -> %s, endpoint: %s, err: %v", url, endpoint, err))
+		if endpoint == "/rpc" {
+			err = s.router.AddRouter("/", "", handler)
+			s.log.Info(fmt.Sprintf("added router / -> %s, endpoint: %s, err: %v", url, endpoint, err))
+		}
+		if endpoint == "/ws" {
+			err = s.router.AddRouter("", "/ws", handler)
+			s.log.Info(fmt.Sprintf("added router /ws -> %s, endpoint: %s, err: %v", url, endpoint, err))
+		}
+	}
+
 	return s.router.AddRouter(url, endpoint, handler)
 }
 
