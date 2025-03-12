@@ -8,6 +8,7 @@ on:
     branches:
       - master
       - dev
+      - update-versions-v1.13.0-fuji
 
 jobs:
   publish_ghcr_image:
@@ -49,10 +50,10 @@ jobs:
           BUILD_MULTI_ARCH: 1
         run: scripts/build_image.sh
 
-      - name: Build and publish bootstrap-monitor image to GHCR
-        env:
-          DOCKER_USERNAME: ${{ github.actor }}
-          DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
-          DOCKER_IMAGE: ghcr.io/${{ steps.repo_slug.outputs.result }}-bootstrap-monitor
-          BUILD_MULTI_ARCH: 1
-        run: scripts/build_bootstrap_monitor_image.sh
+      # - name: Build and publish bootstrap-monitor image to GHCR
+      #   env:
+      #     DOCKER_USERNAME: ${{ github.actor }}
+      #     DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
+      #     DOCKER_IMAGE: ghcr.io/${{ steps.repo_slug.outputs.result }}-bootstrap-monitor
+      #     BUILD_MULTI_ARCH: 1
+      #   run: scripts/build_bootstrap_monitor_image.sh
