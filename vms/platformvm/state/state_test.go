@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
@@ -514,26 +514,43 @@ func TestState_writeStakers(t *testing.T) {
 				)
 
 				for subnetIDNodeID, expectedDiff := range test.expectedValidatorDiffs {
-					diffKey := marshalDiffKey(subnetIDNodeID.subnetID, 1, subnetIDNodeID.nodeID)
-					weightDiffBytes, err := state.validatorWeightDiffsDB.Get(diffKey)
-					if expectedDiff.weightDiff.Amount == 0 {
-						require.ErrorIs(err, database.ErrNotFound)
-					} else {
-						require.NoError(err)
+					requireValidDiff := func(
+						diffKey []byte,
+						weightDiffs database.Database,
+						publicKeyDiffs database.Database,
+					) {
+						t.Helper()
 
-						weightDiff, err := unmarshalWeightDiff(weightDiffBytes)
-						require.NoError(err)
-						require.Equal(&expectedDiff.weightDiff, weightDiff)
+						weightDiffBytes, err := weightDiffs.Get(diffKey)
+						if expectedDiff.weightDiff.Amount == 0 {
+							require.ErrorIs(err, database.ErrNotFound)
+						} else {
+							require.NoError(err)
+
+							weightDiff, err := unmarshalWeightDiff(weightDiffBytes)
+							require.NoError(err)
+							require.Equal(&expectedDiff.weightDiff, weightDiff)
+						}
+
+						publicKeyDiffBytes, err := publicKeyDiffs.Get(diffKey)
+						if bytes.Equal(expectedDiff.prevPublicKey, expectedDiff.newPublicKey) {
+							require.ErrorIs(err, database.ErrNotFound)
+						} else {
+							require.NoError(err)
+
+							require.Equal(expectedDiff.prevPublicKey, publicKeyDiffBytes)
+						}
 					}
-
-					publicKeyDiffBytes, err := state.validatorPublicKeyDiffsDB.Get(diffKey)
-					if bytes.Equal(expectedDiff.prevPublicKey, expectedDiff.newPublicKey) {
-						require.ErrorIs(err, database.ErrNotFound)
-					} else {
-						require.NoError(err)
-
-						require.Equal(expectedDiff.prevPublicKey, publicKeyDiffBytes)
-					}
+					requireValidDiff(
+						marshalDiffKeyBySubnetID(subnetIDNodeID.subnetID, 1, subnetIDNodeID.nodeID),
+						state.validatorWeightDiffsBySubnetIDDB,
+						state.validatorPublicKeyDiffsBySubnetIDDB,
+					)
+					requireValidDiff(
+						marshalDiffKeyByHeight(1, subnetIDNodeID.subnetID, subnetIDNodeID.nodeID),
+						state.validatorWeightDiffsByHeightDB,
+						state.validatorPublicKeyDiffsByHeightDB,
+					)
 				}
 
 				// re-load the state from disk for the second iteration
@@ -1086,6 +1103,38 @@ func TestState_ApplyValidatorDiffs(t *testing.T) {
 				))
 				require.Equal(prevDiff.expectedSubnetValidatorSet, subnetValidatorSet)
 			}
+
+			// Checks applying diffs to all validator sets using height-based indices
+			{
+				allValidatorSets := make(map[ids.ID]map[ids.NodeID]*validators.GetValidatorOutput)
+				if len(diff.expectedPrimaryValidatorSet) != 0 {
+					allValidatorSets[constants.PrimaryNetworkID] = copyValidatorSet(diff.expectedPrimaryValidatorSet)
+				}
+				if len(diff.expectedSubnetValidatorSet) != 0 {
+					allValidatorSets[subnetID] = copyValidatorSet(diff.expectedSubnetValidatorSet)
+				}
+				require.NoError(state.ApplyAllValidatorWeightDiffs(
+					context.Background(),
+					allValidatorSets,
+					currentHeight,
+					prevHeight+1,
+				))
+				require.NoError(state.ApplyAllValidatorPublicKeyDiffs(
+					context.Background(),
+					allValidatorSets,
+					currentHeight,
+					prevHeight+1,
+				))
+
+				expectedAllValidatorSets := make(map[ids.ID]map[ids.NodeID]*validators.GetValidatorOutput)
+				if len(prevDiff.expectedPrimaryValidatorSet) != 0 {
+					expectedAllValidatorSets[constants.PrimaryNetworkID] = prevDiff.expectedPrimaryValidatorSet
+				}
+				if len(prevDiff.expectedSubnetValidatorSet) != 0 {
+					expectedAllValidatorSets[subnetID] = prevDiff.expectedSubnetValidatorSet
+				}
+				require.Equal(expectedAllValidatorSets, allValidatorSets)
+			}
 		}
 	}
 }
@@ -1624,6 +1673,29 @@ func TestL1Validators(t *testing.T) {
 					PublicKey:         pkBytes,
 					Weight:            2, // Increased
 					EndAccumulatedFee: 1, // Active
+				},
+			},
+		},
+		{
+			name: "increase inactive weight",
+			initial: []L1Validator{
+				{
+					ValidationID:      l1Validator.ValidationID,
+					SubnetID:          l1Validator.SubnetID,
+					NodeID:            l1Validator.NodeID,
+					PublicKey:         pkBytes,
+					Weight:            1, // Not removed
+					EndAccumulatedFee: 0, // Inactive
+				},
+			},
+			l1Validators: []L1Validator{
+				{
+					ValidationID:      l1Validator.ValidationID,
+					SubnetID:          l1Validator.SubnetID,
+					NodeID:            l1Validator.NodeID,
+					PublicKey:         pkBytes,
+					Weight:            2, // Increased
+					EndAccumulatedFee: 0, // Inactive
 				},
 			},
 		},

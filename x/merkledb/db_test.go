@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package merkledb
@@ -8,27 +8,24 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"math/rand"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/dbtest"
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/trace"
 	"github.com/ava-labs/avalanchego/utils/hashing"
 	"github.com/ava-labs/avalanchego/utils/maybe"
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/units"
 )
-
-const defaultHistoryLength = 300
 
 // newDB returns a new merkle database with the underlying type so that tests can access unexported fields
 func newDB(ctx context.Context, db database.Database, config Config) (*merkleDB, error) {
@@ -37,22 +34,6 @@ func newDB(ctx context.Context, db database.Database, config Config) (*merkleDB,
 		return nil, err
 	}
 	return db.(*merkleDB), nil
-}
-
-func newDefaultConfig() Config {
-	return Config{
-		BranchFactor:                BranchFactor16,
-		Hasher:                      DefaultHasher,
-		RootGenConcurrency:          0,
-		HistoryLength:               defaultHistoryLength,
-		ValueNodeCacheSize:          units.MiB,
-		IntermediateNodeCacheSize:   units.MiB,
-		IntermediateWriteBufferSize: units.KiB,
-		IntermediateWriteBatchSize:  256 * units.KiB,
-		Reg:                         prometheus.NewRegistry(),
-		TraceLevel:                  InfoTrace,
-		Tracer:                      trace.Noop,
-	}
 }
 
 func Test_MerkleDB_Get_Safety(t *testing.T) {
@@ -134,7 +115,7 @@ func Test_MerkleDB_DB_Load_Root_From_DB(t *testing.T) {
 	db, err := New(
 		context.Background(),
 		baseDB,
-		newDefaultConfig(),
+		NewConfig(),
 	)
 	require.NoError(err)
 
@@ -162,7 +143,7 @@ func Test_MerkleDB_DB_Load_Root_From_DB(t *testing.T) {
 	db, err = New(
 		context.Background(),
 		baseDB,
-		newDefaultConfig(),
+		NewConfig(),
 	)
 	require.NoError(err)
 
@@ -176,7 +157,7 @@ func Test_MerkleDB_DB_Rebuild(t *testing.T) {
 
 	initialSize := 5_000
 
-	config := newDefaultConfig()
+	config := NewConfig()
 	config.ValueNodeCacheSize = uint(initialSize)
 	config.IntermediateNodeCacheSize = uint(initialSize)
 
@@ -233,7 +214,7 @@ func Test_MerkleDB_Failed_Batch_Commit(t *testing.T) {
 	db, err := New(
 		context.Background(),
 		memDB,
-		newDefaultConfig(),
+		NewConfig(),
 	)
 	require.NoError(err)
 
@@ -254,7 +235,7 @@ func Test_MerkleDB_Value_Cache(t *testing.T) {
 	db, err := New(
 		context.Background(),
 		memDB,
-		newDefaultConfig(),
+		NewConfig(),
 	)
 	require.NoError(err)
 
@@ -337,7 +318,7 @@ func Test_MerkleDB_CommitRangeProof_DeletesValuesInRange(t *testing.T) {
 	require.NoError(err)
 
 	// confirm there are no key.values in the proof
-	require.Empty(proof.KeyValues)
+	require.Empty(proof.KeyChanges)
 
 	// add values to be deleted by proof commit
 	batch := db.NewBatch()
@@ -347,7 +328,8 @@ func Test_MerkleDB_CommitRangeProof_DeletesValuesInRange(t *testing.T) {
 	require.NoError(batch.Write())
 
 	// despite having no key/values in it, committing this proof should delete key1-key3.
-	require.NoError(db.CommitRangeProof(context.Background(), maybe.Nothing[[]byte](), maybe.Some([]byte("key3")), proof))
+	_, err = db.CommitRangeProof(context.Background(), maybe.Nothing[[]byte](), maybe.Some([]byte("key3")), proof)
+	require.NoError(err)
 
 	afterCommitRoot, err := db.GetMerkleRoot(context.Background())
 	require.NoError(err)
@@ -380,7 +362,8 @@ func Test_MerkleDB_CommitRangeProof_EmptyTrie(t *testing.T) {
 	db2, err := getBasicDB()
 	require.NoError(err)
 
-	require.NoError(db2.CommitRangeProof(context.Background(), maybe.Some([]byte("key1")), maybe.Some([]byte("key3")), proof))
+	_, err = db2.CommitRangeProof(context.Background(), maybe.Some([]byte("key1")), maybe.Some([]byte("key3")), proof)
+	require.NoError(err)
 
 	// [db2] should have the same key-value pairs as [db1].
 	db2Root, err := db2.GetMerkleRoot(context.Background())
@@ -425,12 +408,13 @@ func Test_MerkleDB_CommitRangeProof_TrieWithInitialValues(t *testing.T) {
 	require.NoError(batch.Write())
 
 	// Commit the proof from [db1] to [db2]
-	require.NoError(db2.CommitRangeProof(
+	_, err = db2.CommitRangeProof(
 		context.Background(),
 		maybe.Some([]byte("key1")),
 		maybe.Some([]byte("key3")),
 		proof,
-	))
+	)
+	require.NoError(err)
 
 	// [db2] should have the same key-value pairs as [db1].
 	// Note that "key25" was in the range covered by the proof,
@@ -817,11 +801,11 @@ func TestMerkleDBClear(t *testing.T) {
 	require.Zero(db.intermediateNodeDB.writeBuffer.currentSize)
 
 	// Assert history has only the clearing change.
-	require.Len(db.history.lastChanges, 1)
-	change, ok := db.history.lastChanges[emptyRootID]
+	require.Len(db.history.lastChangesInsertNumber, 1)
+	change, ok := db.history.getRootChanges(emptyRootID)
 	require.True(ok)
 	require.Empty(change.nodes)
-	require.Empty(change.values)
+	require.Empty(change.keyChanges)
 }
 
 func FuzzMerkleDBEmptyRandomizedActions(f *testing.F) {
@@ -903,13 +887,13 @@ const (
 )
 
 func runRandDBTest(require *require.Assertions, r *rand.Rand, rt randTest, tokenSize int) {
-	db, err := getBasicDBWithBranchFactor(tokenSizeToBranchFactor[tokenSize])
+	config := NewConfig()
+	config.BranchFactor = tokenSizeToBranchFactor[tokenSize]
+	db, err := New(context.Background(), memdb.New(), config)
 	require.NoError(err)
 
-	const (
-		maxProofLen  = 100
-		maxPastRoots = defaultHistoryLength
-	)
+	maxProofLen := 100
+	maxPastRoots := int(config.HistoryLength)
 
 	var (
 		values               = make(map[Key][]byte) // tracks content of the trie
@@ -958,7 +942,7 @@ func runRandDBTest(require *require.Assertions, r *rand.Rand, rt randTest, token
 				continue
 			}
 			require.NoError(err)
-			require.LessOrEqual(len(rangeProof.KeyValues), maxProofLen)
+			require.LessOrEqual(len(rangeProof.KeyChanges), maxProofLen)
 
 			require.NoError(rangeProof.Verify(
 				context.Background(),
@@ -966,7 +950,8 @@ func runRandDBTest(require *require.Assertions, r *rand.Rand, rt randTest, token
 				end,
 				root,
 				tokenSize,
-				db.hasher,
+				config.Hasher,
+				maxProofLen,
 			))
 		case opGenerateChangeProof:
 			root, err := db.GetMerkleRoot(context.Background())
@@ -1007,6 +992,7 @@ func runRandDBTest(require *require.Assertions, r *rand.Rand, rt randTest, token
 				start,
 				end,
 				root,
+				maxProofLen,
 			))
 		case opWriteBatch:
 			oldRoot, err := db.GetMerkleRoot(context.Background())
@@ -1019,9 +1005,7 @@ func runRandDBTest(require *require.Assertions, r *rand.Rand, rt randTest, token
 				continue
 			}
 
-			for key, value := range uncommittedKeyValues {
-				values[key] = value
-			}
+			maps.Copy(values, uncommittedKeyValues)
 			clear(uncommittedKeyValues)
 
 			for key := range uncommittedDeletes {
@@ -1301,7 +1285,7 @@ func TestCrashRecovery(t *testing.T) {
 	merkleDB, err := newDatabase(
 		context.Background(),
 		baseDB,
-		newDefaultConfig(),
+		NewConfig(),
 		&mockMetrics{},
 	)
 	require.NoError(err)
@@ -1319,7 +1303,7 @@ func TestCrashRecovery(t *testing.T) {
 	newMerkleDB, err := newDatabase(
 		context.Background(),
 		baseDB,
-		newDefaultConfig(),
+		NewConfig(),
 		&mockMetrics{},
 	)
 	require.NoError(err)
@@ -1404,4 +1388,452 @@ func BenchmarkIteration(b *testing.B) {
 			it.Release()
 		}
 	})
+}
+
+func Test_FindNextKey_InSync(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	now := time.Now().UnixNano()
+
+	t.Logf("seed: %d", now)
+	r := rand.New(rand.NewSource(now)) // #nosec G404
+	dbToSync, err := generateTrie(t, r, 1000)
+	require.NoError(err)
+
+	db, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+
+	// sync db to the same state as dbToSync
+	proof, err := dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 1000)
+	require.NoError(err)
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), proof)
+	require.NoError(err)
+	require.True(nextKey.IsNothing())
+
+	proof, err = dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 500)
+	require.NoError(err)
+
+	// the two dbs should be in sync, so next key should be nil
+	lastKey := proof.KeyChanges[len(proof.KeyChanges)-1].Key
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), proof)
+	require.NoError(err)
+	require.True(nextKey.IsNothing())
+
+	// add an extra value to sync db past the last key returned
+	newKeyVal := make([]byte, len(lastKey))
+	copy(newKeyVal, lastKey)
+	newKeyVal = append(newKeyVal, 16) // make sure new key is after last key
+	require.NoError(db.Put(newKeyVal, []byte{1}))
+
+	// create a range endpoint that is before the newly added key, but after the last key
+	endPointBeforeNewKey := make([]byte, len(newKeyVal))
+	copy(endPointBeforeNewKey, newKeyVal)
+	endPointBeforeNewKey[len(endPointBeforeNewKey)-1] = 8
+
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some(endPointBeforeNewKey), proof)
+	require.NoError(err)
+
+	// next key would be after the end of the range, so it returns Nothing instead
+	require.True(nextKey.IsNothing())
+}
+
+func Test_FindNextKey_Deleted(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	dbToSync, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+	require.NoError(dbToSync.Put([]byte{0x10}, []byte{1}))
+	require.NoError(dbToSync.Put([]byte{0x11, 0x11}, []byte{2}))
+
+	// Create empty DB to commit to one key
+	db, err := New(ctx, memdb.New(), newDefaultDBConfig())
+	require.NoError(err)
+	require.NoError(db.Put([]byte{0x13}, []byte{3}))
+
+	// 0x12 was "deleted" and there should be no extra node in the proof since there was nothing with a common prefix
+	rangeProof, err := dbToSync.GetRangeProof(context.Background(), maybe.Nothing[[]byte](), maybe.Some([]byte{0x12}), 100)
+	require.NoError(err)
+
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x20}), rangeProof)
+	require.NoError(err)
+	require.Equal(maybe.Some([]byte{0x13}), nextKey)
+
+	// 0x11 was "deleted" and 0x11.0x11 should be in the exclusion proof
+	extraNodeProof, err := dbToSync.GetProof(context.Background(), []byte{0x11})
+	require.NoError(err)
+	rangeProof.EndProof = extraNodeProof.Path
+
+	// Reset the db and commit new proof
+	require.NoError(db.Clear())
+	require.NoError(db.Put([]byte{0x13}, []byte{3}))
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x20}), rangeProof)
+	require.NoError(err)
+	require.Equal(maybe.Some([]byte{0x13}), nextKey)
+}
+
+func Test_FindNextKey_BranchInLocal(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	db, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+	require.NoError(db.Put([]byte{0x11}, []byte{1}))
+	require.NoError(db.Put([]byte{0x11, 0x11}, []byte{2}))
+
+	rangeProof, err := db.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x20}), 100)
+	require.NoError(err)
+
+	require.NoError(db.Put([]byte{0x11, 0x15}, []byte{4}))
+
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x20}), rangeProof)
+	require.NoError(err)
+	require.Equal(maybe.Some([]byte{0x11, 0x15}), nextKey)
+}
+
+func Test_FindNextKey_BranchInReceived(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	db, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+	require.NoError(db.Put([]byte{0x11}, []byte{1}))
+	require.NoError(db.Put([]byte{0x12}, []byte{2}))
+	require.NoError(db.Put([]byte{0x12, 0xA0}, []byte{4}))
+
+	rangeProof, err := db.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x12}), 100)
+	require.NoError(err)
+
+	require.NoError(db.Delete([]byte{0x12, 0xA0}))
+
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some([]byte{0x20}), rangeProof)
+	require.NoError(err)
+	require.Equal(maybe.Some([]byte{0x12, 0xA0}), nextKey)
+}
+
+func Test_FindNextKey_ExtraValues(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	now := time.Now().UnixNano()
+	t.Logf("seed: %d", now)
+	r := rand.New(rand.NewSource(now)) // #nosec G404
+	dbToSync, err := generateTrie(t, r, 1000)
+	require.NoError(err)
+
+	// Make a matching DB
+	db, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+	rangeProof, err := dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 1000)
+	require.NoError(err)
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), rangeProof)
+	require.NoError(err)
+	require.True(nextKey.IsNothing())
+
+	// Get a new partial range proof
+	rangeProof, err = dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 500)
+	require.NoError(err)
+
+	// add an extra value to local db
+	lastKey := rangeProof.KeyChanges[len(rangeProof.KeyChanges)-1].Key
+	afterKeyVal := make([]byte, len(lastKey))
+	copy(afterKeyVal, lastKey)
+	afterKeyVal = append(afterKeyVal, 16) // make sure new key is after last key
+
+	require.NoError(db.Put(afterKeyVal, []byte{1}))
+
+	// next key at prefix of newly added point
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), rangeProof)
+	require.NoError(err)
+	require.True(nextKey.HasValue())
+	require.True(isPrefix(afterKeyVal, nextKey.Value()))
+
+	require.NoError(db.Delete(afterKeyVal))
+
+	require.NoError(dbToSync.Put(afterKeyVal, []byte{1}))
+
+	rangeProof, err = dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some(lastKey), 500)
+	require.NoError(err)
+
+	// next key at prefix of newly added point
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), rangeProof)
+	require.NoError(err)
+	require.True(nextKey.HasValue())
+
+	// deal with odd length key
+	require.True(isPrefix(afterKeyVal, nextKey.Value()))
+}
+
+func isPrefix(data []byte, prefix []byte) bool {
+	if prefix[len(prefix)-1]%16 == 0 {
+		index := 0
+		for ; index < len(prefix)-1; index++ {
+			if data[index] != prefix[index] {
+				return false
+			}
+		}
+		return data[index]>>4 == prefix[index]>>4
+	}
+	return bytes.HasPrefix(data, prefix)
+}
+
+func Test_FindNextKey_DifferentChild(t *testing.T) {
+	require := require.New(t)
+	ctx := context.Background()
+	now := time.Now().UnixNano()
+	t.Logf("seed: %d", now)
+	r := rand.New(rand.NewSource(now)) // #nosec G404
+	dbToSync, err := generateTrie(t, r, 500)
+	require.NoError(err)
+
+	// Make a matching DB
+	db, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+	rangeProof, err := dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 1000)
+	require.NoError(err)
+	nextKey, err := db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), rangeProof)
+	require.NoError(err)
+	require.True(nextKey.IsNothing())
+
+	rangeProof, err = dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), 100)
+	require.NoError(err)
+	lastKey := rangeProof.KeyChanges[len(rangeProof.KeyChanges)-1].Key
+
+	// local db has a different child than remote db
+	lastKey = append(lastKey, 16)
+	require.NoError(db.Put(lastKey, []byte{1}))
+
+	require.NoError(dbToSync.Put(lastKey, []byte{2}))
+
+	rangeProof, err = dbToSync.GetRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Some(rangeProof.KeyChanges[len(rangeProof.KeyChanges)-1].Key), 100)
+	require.NoError(err)
+
+	nextKey, err = db.CommitRangeProof(ctx, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), rangeProof)
+	require.NoError(err)
+	require.True(nextKey.HasValue())
+	require.Equal(lastKey, nextKey.Value())
+}
+
+// Test findNextKey by computing the expected result in a naive, inefficient
+// way and comparing it to the actual result
+func TestFindNextKeyRandom(t *testing.T) {
+	now := time.Now().UnixNano()
+	ctx := context.Background()
+	t.Logf("seed: %d", now)
+	rand := rand.New(rand.NewSource(now)) // #nosec G404
+	require := require.New(t)
+
+	// Create a "remote" database and "local" database
+	remoteDB, err := New(
+		ctx,
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+
+	config := newDefaultDBConfig()
+	localDB, err := New(
+		ctx,
+		memdb.New(),
+		config,
+	)
+	require.NoError(err)
+
+	var (
+		numProofsToTest  = 250
+		numKeyValues     = 250
+		maxKeyLen        = 256
+		maxValLen        = 256
+		maxRangeStartLen = 8
+		maxRangeEndLen   = 8
+		maxProofLen      = 128
+	)
+
+	// Put random keys into the databases
+	for _, db := range []database.Database{remoteDB, localDB} {
+		for i := 0; i < numKeyValues; i++ {
+			key := make([]byte, rand.Intn(maxKeyLen))
+			_, _ = rand.Read(key)
+			val := make([]byte, rand.Intn(maxValLen))
+			_, _ = rand.Read(val)
+			require.NoError(db.Put(key, val))
+		}
+	}
+
+	// Repeatedly generate end proofs from the remote database and compare
+	// the result of findNextKey to the expected result.
+	for proofIndex := 0; proofIndex < numProofsToTest; proofIndex++ {
+		// Generate a proof for a random key
+		var (
+			rangeStart []byte
+			rangeEnd   []byte
+		)
+		// Generate a valid range start and end
+		for rangeStart == nil || bytes.Compare(rangeStart, rangeEnd) == 1 {
+			rangeStart = make([]byte, rand.Intn(maxRangeStartLen)+1)
+			_, _ = rand.Read(rangeStart)
+			rangeEnd = make([]byte, rand.Intn(maxRangeEndLen)+1)
+			_, _ = rand.Read(rangeEnd)
+		}
+
+		startKey := maybe.Nothing[[]byte]()
+		if len(rangeStart) > 0 {
+			startKey = maybe.Some(rangeStart)
+		}
+		endKey := maybe.Nothing[[]byte]()
+		if len(rangeEnd) > 0 {
+			endKey = maybe.Some(rangeEnd)
+		}
+
+		remoteProof, err := remoteDB.GetRangeProof(
+			ctx,
+			startKey,
+			endKey,
+			rand.Intn(maxProofLen)+1,
+		)
+		require.NoError(err)
+
+		if len(remoteProof.KeyChanges) == 0 {
+			continue
+		}
+		lastReceivedKey := remoteProof.KeyChanges[len(remoteProof.KeyChanges)-1].Key
+
+		// Commit the proof to the local database as we do
+		// in the actual syncer.
+		_, err = localDB.CommitRangeProof(
+			ctx,
+			startKey,
+			endKey,
+			remoteProof,
+		)
+		require.NoError(err)
+
+		localProof, err := localDB.GetProof(
+			context.Background(),
+			lastReceivedKey,
+		)
+		require.NoError(err)
+
+		type keyAndID struct {
+			key Key
+			id  ids.ID
+		}
+
+		// Set of key prefix/ID pairs proven by the remote database's end proof.
+		remoteKeyIDs := []keyAndID{}
+		for _, node := range remoteProof.EndProof {
+			for childIdx, childID := range node.Children {
+				remoteKeyIDs = append(remoteKeyIDs, keyAndID{
+					key: node.Key.Extend(ToToken(childIdx, BranchFactorToTokenSize[config.BranchFactor])),
+					id:  childID,
+				})
+			}
+		}
+
+		// Set of key prefix/ID pairs proven by the local database's proof.
+		localKeyIDs := []keyAndID{}
+		for _, node := range localProof.Path {
+			for childIdx, childID := range node.Children {
+				localKeyIDs = append(localKeyIDs, keyAndID{
+					key: node.Key.Extend(ToToken(childIdx, BranchFactorToTokenSize[config.BranchFactor])),
+					id:  childID,
+				})
+			}
+		}
+
+		// Sort in ascending order by key prefix.
+		serializedPathCompare := func(i, j keyAndID) int {
+			return i.key.Compare(j.key)
+		}
+		slices.SortFunc(remoteKeyIDs, serializedPathCompare)
+		slices.SortFunc(localKeyIDs, serializedPathCompare)
+
+		// Filter out keys that are before the last received key
+		findBounds := func(keyIDs []keyAndID) (int, int) {
+			var (
+				firstIdxInRange      = len(keyIDs)
+				firstIdxInRangeFound = false
+				firstIdxOutOfRange   = len(keyIDs)
+			)
+			for i, keyID := range keyIDs {
+				if !firstIdxInRangeFound && bytes.Compare(keyID.key.Bytes(), lastReceivedKey) > 0 {
+					firstIdxInRange = i
+					firstIdxInRangeFound = true
+					continue
+				}
+				if bytes.Compare(keyID.key.Bytes(), rangeEnd) > 0 {
+					firstIdxOutOfRange = i
+					break
+				}
+			}
+			return firstIdxInRange, firstIdxOutOfRange
+		}
+
+		remoteFirstIdxAfterLastReceived, remoteFirstIdxAfterEnd := findBounds(remoteKeyIDs)
+		remoteKeyIDs = remoteKeyIDs[remoteFirstIdxAfterLastReceived:remoteFirstIdxAfterEnd]
+
+		localFirstIdxAfterLastReceived, localFirstIdxAfterEnd := findBounds(localKeyIDs)
+		localKeyIDs = localKeyIDs[localFirstIdxAfterLastReceived:localFirstIdxAfterEnd]
+
+		// Find smallest difference between the set of key/ID pairs proven by
+		// the remote/local proofs for key/ID pairs after the last received key.
+		var (
+			smallestDiffKey Key
+			foundDiff       bool
+		)
+		for i := 0; i < len(remoteKeyIDs) && i < len(localKeyIDs); i++ {
+			// See if the keys are different.
+			smaller, bigger := remoteKeyIDs[i], localKeyIDs[i]
+			if serializedPathCompare(localKeyIDs[i], remoteKeyIDs[i]) == -1 {
+				smaller, bigger = localKeyIDs[i], remoteKeyIDs[i]
+			}
+
+			if smaller.key != bigger.key || smaller.id != bigger.id {
+				smallestDiffKey = smaller.key
+				foundDiff = true
+				break
+			}
+		}
+		if !foundDiff {
+			// All the keys were equal. The smallest diff is the next key
+			// in the longer of the lists (if they're not same length.)
+			if len(remoteKeyIDs) < len(localKeyIDs) {
+				smallestDiffKey = localKeyIDs[len(remoteKeyIDs)].key
+			} else if len(remoteKeyIDs) > len(localKeyIDs) {
+				smallestDiffKey = remoteKeyIDs[len(localKeyIDs)].key
+			}
+		}
+
+		// Get the actual value from the syncer
+		gotFirstDiff, err := localDB.CommitRangeProof(ctx, maybe.Nothing[[]byte](), endKey, remoteProof)
+		require.NoError(err)
+
+		if bytes.Compare(smallestDiffKey.Bytes(), rangeEnd) >= 0 {
+			// The smallest key which differs is after the range end so the
+			// next key to get should be nil because we're done fetching the range.
+			require.True(gotFirstDiff.IsNothing())
+		} else {
+			require.Equal(smallestDiffKey.Bytes(), gotFirstDiff.Value())
+		}
+	}
 }

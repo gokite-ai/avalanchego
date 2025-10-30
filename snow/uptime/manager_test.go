@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package uptime
@@ -390,12 +390,12 @@ func TestCalculateUptimeWhenNeverConnected(t *testing.T) {
 
 	duration, lastUpdated, err := up.CalculateUptime(nodeID0)
 	require.NoError(err)
-	require.Equal(time.Duration(0), duration)
+	require.Zero(duration)
 	require.Equal(clk.UnixTime(), lastUpdated)
 
 	uptime, err := up.CalculateUptimePercentFrom(nodeID0, startTime)
 	require.NoError(err)
-	require.Equal(float64(0), uptime)
+	require.Zero(uptime)
 }
 
 func TestCalculateUptimeWhenConnectedBeforeTracking(t *testing.T) {
@@ -512,7 +512,7 @@ func TestCalculateUptimePercentage(t *testing.T) {
 
 	uptime, err := up.CalculateUptimePercentFrom(nodeID0, startTime.Truncate(time.Second))
 	require.NoError(err)
-	require.Equal(float64(0), uptime)
+	require.Zero(uptime)
 }
 
 func TestStopTrackingUnixTimeRegression(t *testing.T) {

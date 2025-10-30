@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package peer
@@ -194,6 +194,10 @@ type peer struct {
 	// getPeerListChan signals that we should attempt to send a GetPeerList to
 	// this peer
 	getPeerListChan chan struct{}
+
+	// isIngress is true only if the remote peer is connected to this node,
+	// in contrast of this node being connected to the remote peer.
+	isIngress bool
 }
 
 // Start a new peer instance.
@@ -206,9 +210,11 @@ func Start(
 	cert *staking.Certificate,
 	id ids.NodeID,
 	messageQueue MessageQueue,
+	isIngress bool,
 ) Peer {
 	onClosingCtx, onClosingCtxCancel := context.WithCancel(context.Background())
 	p := &peer{
+		isIngress:          isIngress,
 		Config:             config,
 		conn:               conn,
 		cert:               cert,
@@ -220,6 +226,10 @@ func Start(
 		onClosingCtxCancel: onClosingCtxCancel,
 		onClosed:           make(chan struct{}),
 		getPeerListChan:    make(chan struct{}, 1),
+	}
+
+	if isIngress {
+		p.IngressConnectionCount.Add(1)
 	}
 
 	go p.readMessages()
@@ -348,6 +358,10 @@ func (p *peer) AwaitClosed(ctx context.Context) error {
 func (p *peer) close() {
 	if atomic.AddInt64(&p.numExecuting, -1) != 0 {
 		return
+	}
+
+	if p.isIngress {
+		p.IngressConnectionCount.Add(-1)
 	}
 
 	p.Network.Disconnected(p.id)
@@ -515,6 +529,7 @@ func (p *peer) writeMessages() {
 	knownPeersFilter, knownPeersSalt := p.Network.KnownPeers()
 
 	_, areWeAPrimaryNetworkValidator := p.Validators.GetValidator(constants.PrimaryNetworkID, p.MyNodeID)
+	requestAllSubnetIPs := areWeAPrimaryNetworkValidator || p.Config.ConnectToAllValidators
 	msg, err := p.MessageCreator.Handshake(
 		p.NetworkID,
 		p.Clock.Unix(),
@@ -531,7 +546,7 @@ func (p *peer) writeMessages() {
 		p.ObjectedACPs,
 		knownPeersFilter,
 		knownPeersSalt,
-		areWeAPrimaryNetworkValidator,
+		requestAllSubnetIPs,
 	)
 	if err != nil {
 		p.Log.Error(failedToCreateMessageLog,
@@ -627,10 +642,11 @@ func (p *peer) sendNetworkMessages() {
 		case <-p.getPeerListChan:
 			knownPeersFilter, knownPeersSalt := p.Config.Network.KnownPeers()
 			_, areWeAPrimaryNetworkValidator := p.Validators.GetValidator(constants.PrimaryNetworkID, p.MyNodeID)
+			requestAllSubnetIPs := areWeAPrimaryNetworkValidator || p.Config.ConnectToAllValidators
 			msg, err := p.Config.MessageCreator.GetPeerList(
 				knownPeersFilter,
 				knownPeersSalt,
-				areWeAPrimaryNetworkValidator,
+				requestAllSubnetIPs,
 			)
 			if err != nil {
 				p.Log.Error(failedToCreateMessageLog,

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package syncer
@@ -1273,7 +1273,7 @@ func TestStateSyncIsStoppedIfEnoughVotesAreCastedWithNoClearMajority(t *testing.
 	// check that finally summary is passed to VM
 	require.False(majoritySummaryCalled)
 	require.False(minoritySummaryCalled)
-	require.True(stateSyncFullyDone) // no restart, just move to boostrapping
+	require.True(stateSyncFullyDone) // no restart, just move to bootstrapping
 }
 
 func TestStateSyncIsDoneOnceVMNotifies(t *testing.T) {

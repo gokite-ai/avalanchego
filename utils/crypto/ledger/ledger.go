@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2024, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package ledger
@@ -11,7 +11,7 @@ import (
 	"github.com/ava-labs/avalanchego/utils/hashing"
 	"github.com/ava-labs/avalanchego/version"
 
-	ledger "github.com/ava-labs/ledger-avalanche/go"
+	ledger "github.com/ava-labs/ledger-avalanche-go"
 	bip32 "github.com/tyler-smith/go-bip32"
 )
 
