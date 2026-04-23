@@ -1,0 +1,111 @@
+name: Publish to GitHub Container Registry
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+      - "subnet-evm/v*"
+    branches:
+      - master
+      - dev
+      - fuji
+
+jobs:
+  publish_avalanchego_ghcr_image:
+    if: github.event_name == 'workflow_dispatch' || github.ref_type != 'tag' || startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install qemu (required for cross-platform builds)
+        run: |
+          sudo apt update
+          sudo apt -y install qemu-system qemu-user-static
+          sudo systemctl restart docker
+
+      - name: Create multiplatform docker builder
+        run: docker buildx create --use
+
+      - name: Derive release metadata
+        id: release
+        shell: bash
+        run: |
+          echo "repo_slug=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "docker_tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and publish avalanchego image to GHCR
+        env:
+          DOCKER_USERNAME: ${{ github.actor }}
+          DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_IMAGE: ghcr.io/${{ steps.release.outputs.repo_slug }}/avalanchego
+          DOCKER_IMAGE_TAG: ${{ steps.release.outputs.docker_tag }}
+          BUILD_MULTI_ARCH: 1
+        run: scripts/build_image.sh
+
+  publish_subnet_evm_ghcr_image:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'subnet-evm/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install qemu (required for cross-platform builds)
+        run: |
+          sudo apt update
+          sudo apt -y install qemu-system qemu-user-static
+          sudo systemctl restart docker
+
+      - name: Create multiplatform docker builder
+        run: docker buildx create --use
+
+      - name: Derive subnet-evm release metadata
+        id: release
+        shell: bash
+        run: |
+          echo "repo_slug=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "docker_tag=${GITHUB_REF_NAME#subnet-evm/}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for matching avalanchego base image
+        env:
+          DOCKER_USERNAME: ${{ github.actor }}
+          DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
+          AVALANCHEGO_IMAGE: ghcr.io/${{ steps.release.outputs.repo_slug }}/avalanchego:${{ steps.release.outputs.docker_tag }}
+        shell: bash
+        run: |
+          echo "${DOCKER_PASS}" | docker login ghcr.io --username "${DOCKER_USERNAME}" --password-stdin
+          for attempt in {1..30}; do
+            if docker pull "${AVALANCHEGO_IMAGE}"; then
+              exit 0
+            fi
+            echo "Waiting for ${AVALANCHEGO_IMAGE} to become available (${attempt}/30)"
+            sleep 20
+          done
+          echo "Timed out waiting for ${AVALANCHEGO_IMAGE}" >&2
+          exit 1
+
+      - name: Build and publish subnet-evm image to GHCR
+        env:
+          DOCKER_USERNAME: ${{ github.actor }}
+          DOCKER_PASS: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ghcr.io/${{ steps.release.outputs.repo_slug }}/subnet-evm
+          AVALANCHEGO_IMAGE_NAME: ghcr.io/${{ steps.release.outputs.repo_slug }}/avalanchego
+          AVALANCHEGO_NODE_IMAGE: ghcr.io/${{ steps.release.outputs.repo_slug }}/avalanchego:${{ steps.release.outputs.docker_tag }}
+          DOCKER_IMAGE_TAG: ${{ steps.release.outputs.docker_tag }}
+          PUBLISH: 1
+          PLATFORMS: "linux/amd64,linux/arm64"
+        run: scripts/run_task.sh build-subnet-evm-image
