@@ -36,6 +36,7 @@ import (
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/params"
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/plugin/evm/vmerrors"
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txallowlist"
+	"github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txdenylist"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/state"
 	"github.com/ava-labs/libevm/core/types"
@@ -281,6 +282,13 @@ func ValidateTransactionWithState(tx *types.Transaction, signer types.Signer, op
 		txAllowListRole := txallowlist.GetTxAllowListStatus(opts.State, from)
 		if !txAllowListRole.IsEnabled() {
 			return fmt.Errorf("%w: %s", vmerrors.ErrSenderAddressNotAllowListed, from)
+		}
+	}
+
+	// If the tx deny list is enabled, return an error if the from address is deny listed.
+	if params.GetRulesExtra(opts.Rules).IsPrecompileEnabled(txdenylist.ContractAddress) {
+		if txdenylist.IsDenied(opts.State, from) {
+			return fmt.Errorf("%w: %s", vmerrors.ErrSenderAddressDenied, from)
 		}
 	}
 

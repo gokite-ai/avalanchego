@@ -35,6 +35,7 @@ import (
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/params"
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/plugin/evm/vmerrors"
 	"github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txallowlist"
+	"github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txdenylist"
 	"github.com/ava-labs/avalanchego/vms/evm/predicate"
 	"github.com/ava-labs/libevm/common"
 	cmath "github.com/ava-labs/libevm/common/math"
@@ -362,6 +363,12 @@ func (st *StateTransition) preCheck() error {
 			txAllowListRole := txallowlist.GetTxAllowListStatus(st.state, msg.From)
 			if !txAllowListRole.IsEnabled() {
 				return fmt.Errorf("%w: %s", vmerrors.ErrSenderAddressNotAllowListed, msg.From)
+			}
+		}
+		// Check that the sender is not on the tx deny list if enabled
+		if params.GetExtra(st.evm.ChainConfig()).IsPrecompileEnabled(txdenylist.ContractAddress, st.evm.Context.Time) {
+			if txdenylist.IsDenied(st.state, msg.From) {
+				return fmt.Errorf("%w: %s", vmerrors.ErrSenderAddressDenied, msg.From)
 			}
 		}
 	}

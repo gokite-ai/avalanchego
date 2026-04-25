@@ -12,6 +12,7 @@ import (
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/nativeminter"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/rewardmanager"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txallowlist"
+	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txdenylist"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/warp"
 )
 
@@ -33,5 +34,6 @@ import (
 // FeeManagerAddress                = common.HexToAddress("0x0200000000000000000000000000000000000003")
 // RewardManagerAddress             = common.HexToAddress("0x0200000000000000000000000000000000000004")
 // WarpAddress                      = common.HexToAddress("0x0200000000000000000000000000000000000005")
+// TxDenyListAddress                = common.HexToAddress("0x0300000000000000000000000000000000000000")
 // ADD YOUR PRECOMPILE HERE
 // {YourPrecompile}Address          = common.HexToAddress("0x03000000000000000000000000000000000000??")

@@ -8,4 +8,5 @@ import "errors"
 var (
 	ErrInvalidCoinbase             = errors.New("invalid coinbase")
 	ErrSenderAddressNotAllowListed = errors.New("cannot issue transaction from non-allow listed address")
+	ErrSenderAddressDenied         = errors.New("cannot issue transaction from deny listed address")
 )
