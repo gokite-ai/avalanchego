@@ -38,11 +38,11 @@ var (
 	_ PathAdder = readPathAdder{}
 	_ Server    = (*server)(nil)
 
-	KITE_CHAIN_ID = ""
+	KiteChainID = ""
 )
 
 func init() {
-	KITE_CHAIN_ID = os.Getenv("KITE_CHAIN_ID")
+	KiteChainID = os.Getenv("KITE_CHAIN_ID")
 }
 
 type PathAdder interface {
@@ -226,7 +226,7 @@ func (s *server) addChainRoute(chainName string, handler http.Handler, ctx *snow
 	)
 	handler = s.wrapMiddleware(chainName, handler, ctx)
 
-	if KITE_CHAIN_ID != "" && url == "/ext/bc/"+KITE_CHAIN_ID {
+	if KiteChainID != "" && url == "/ext/bc/"+KiteChainID {
 		err := s.router.AddRouter("/ext/bc/kite", endpoint, handler)
 		s.log.Info(fmt.Sprintf("added router /ext/bc/kite -> %s, endpoint: %s, err: %v", url, endpoint, err))
 		if endpoint == "/rpc" {
