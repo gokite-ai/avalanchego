@@ -36,7 +36,11 @@ if [[ -n "${PUBLISH}" ]]; then
   ispush=1
   # A populated DOCKER_USERNAME env var triggers login
   if [[ -n "${DOCKER_USERNAME:-}" ]]; then
-    echo "$DOCKER_PASS" | docker login --username "$DOCKER_USERNAME" --password-stdin
+    if [[ "${IMAGE_NAME}" == "ghcr.io/"* ]]; then
+      echo "$DOCKER_PASS" | docker login ghcr.io --username "$DOCKER_USERNAME" --password-stdin
+    else
+      echo "$DOCKER_PASS" | docker login --username "$DOCKER_USERNAME" --password-stdin
+    fi
   fi
 fi
 
