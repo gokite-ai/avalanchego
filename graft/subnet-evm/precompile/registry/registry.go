@@ -7,6 +7,8 @@ package registry
 // Force imports of each precompile to ensure each precompile's init function runs and registers itself
 // with the registry.
 import (
+	// TODO(JonathanOppenheimer): Uncomment when gaspricemanager init() registration is enabled.
+	// _ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/gaspricemanager"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/deployerallowlist"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/feemanager"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/nativeminter"
@@ -34,6 +36,7 @@ import (
 // FeeManagerAddress                = common.HexToAddress("0x0200000000000000000000000000000000000003")
 // RewardManagerAddress             = common.HexToAddress("0x0200000000000000000000000000000000000004")
 // WarpAddress                      = common.HexToAddress("0x0200000000000000000000000000000000000005")
-// TxDenyListAddress                = common.HexToAddress("0x0300000000000000000000000000000000000000")
+// GasPriceManagerAddress           = common.HexToAddress("0x0200000000000000000000000000000000000006")
 // ADD YOUR PRECOMPILE HERE
+// TxDenyListAddress                = common.HexToAddress("0x0300000000000000000000000000000000000000")
 // {YourPrecompile}Address          = common.HexToAddress("0x03000000000000000000000000000000000000??")
