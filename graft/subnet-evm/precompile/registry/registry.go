@@ -14,6 +14,7 @@ import (
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/nativeminter"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/rewardmanager"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txallowlist"
+	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/txdenylist"
 	_ "github.com/ava-labs/avalanchego/graft/subnet-evm/precompile/contracts/warp"
 )
 
@@ -37,4 +38,5 @@ import (
 // WarpAddress                      = common.HexToAddress("0x0200000000000000000000000000000000000005")
 // GasPriceManagerAddress           = common.HexToAddress("0x0200000000000000000000000000000000000006")
 // ADD YOUR PRECOMPILE HERE
+// TxDenyListAddress                = common.HexToAddress("0x0300000000000000000000000000000000000000")
 // {YourPrecompile}Address          = common.HexToAddress("0x03000000000000000000000000000000000000??")
