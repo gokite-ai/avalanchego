@@ -21,18 +21,15 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ava-labs/avalanchego/graft/coreth/params/extras"
-	"github.com/ava-labs/avalanchego/graft/coreth/precompile/contracts/warp"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/upgrade"
 	"github.com/ava-labs/avalanchego/upgrade/upgradetest"
 	"github.com/ava-labs/avalanchego/utils/constants"
+	"github.com/ava-labs/avalanchego/vms/saevm/cchain/cparams"
 	"github.com/ava-labs/avalanchego/vms/saevm/cmputils"
 
 	avalanchegenesis "github.com/ava-labs/avalanchego/genesis"
 	corethparams "github.com/ava-labs/avalanchego/graft/coreth/params"
-	evmutils "github.com/ava-labs/avalanchego/graft/evm/utils"
-	avalancheutils "github.com/ava-labs/avalanchego/utils"
 	ethparams "github.com/ava-labs/libevm/params"
 )
 
@@ -53,8 +50,8 @@ func TestParseGenesis(t *testing.T) {
 		fujiCtx    = &snow.Context{NetworkUpgrades: upgrade.Fuji}
 		localCtx   = &snow.Context{NetworkUpgrades: upgrade.Default}
 
-		initiallyActive = evmutils.TimeToNewUint64(upgrade.InitiallyActiveTime)
-		unscheduled     = evmutils.TimeToNewUint64(upgrade.UnscheduledActivationTime)
+		initiallyActive = new(upgrade.UnixTimestamp(upgrade.InitiallyActiveTime))
+		unscheduled     = new(upgrade.UnixTimestamp(upgrade.UnscheduledActivationTime))
 	)
 	tests := []struct {
 		name    string
@@ -69,7 +66,7 @@ func TestParseGenesis(t *testing.T) {
 			genesis: avalanchegenesis.MainnetConfig.CChainGenesis,
 			want: &core.Genesis{
 				Config: corethparams.WithExtra(
-					&corethparams.ChainConfig{
+					&ethparams.ChainConfig{
 						ChainID:             mainnetChainID,
 						HomesteadBlock:      big.NewInt(0),
 						DAOForkBlock:        big.NewInt(0),
@@ -82,41 +79,29 @@ func TestParseGenesis(t *testing.T) {
 						PetersburgBlock:     big.NewInt(0),
 						IstanbulBlock:       big.NewInt(0),
 						MuirGlacierBlock:    big.NewInt(0),
-						BerlinBlock:         big.NewInt(1640340),                          // AP2 activation block
-						LondonBlock:         big.NewInt(3308552),                          // AP3 activation block
-						ShanghaiTime:        avalancheutils.PointerTo[uint64](1709740800), // Durango
-						CancunTime:          avalancheutils.PointerTo[uint64](1734368400), // Etna
+						BerlinBlock:         big.NewInt(1640340),     // AP2 activation block
+						LondonBlock:         big.NewInt(3308552),     // AP3 activation block
+						ShanghaiTime:        new(uint64(1709740800)), // Durango
+						CancunTime:          new(uint64(1734368400)), // Etna
 					},
-					&extras.ChainConfig{
-						NetworkUpgrades: extras.NetworkUpgrades{
-							ApricotPhase1BlockTimestamp:     avalancheutils.PointerTo[uint64](1617199200),
-							ApricotPhase2BlockTimestamp:     avalancheutils.PointerTo[uint64](1620644400),
-							ApricotPhase3BlockTimestamp:     avalancheutils.PointerTo[uint64](1629813600),
-							ApricotPhase4BlockTimestamp:     avalancheutils.PointerTo[uint64](1632344400),
-							ApricotPhase5BlockTimestamp:     avalancheutils.PointerTo[uint64](1638468000),
-							ApricotPhasePre6BlockTimestamp:  avalancheutils.PointerTo[uint64](1662341400),
-							ApricotPhase6BlockTimestamp:     avalancheutils.PointerTo[uint64](1662494400),
-							ApricotPhasePost6BlockTimestamp: avalancheutils.PointerTo[uint64](1662519600),
-							BanffBlockTimestamp:             avalancheutils.PointerTo[uint64](1666108800),
-							CortinaBlockTimestamp:           avalancheutils.PointerTo[uint64](1682434800),
-							DurangoBlockTimestamp:           avalancheutils.PointerTo[uint64](1709740800),
-							EtnaTimestamp:                   avalancheutils.PointerTo[uint64](1734368400),
-							FortunaTimestamp:                avalancheutils.PointerTo[uint64](1744124400),
-							GraniteTimestamp:                avalancheutils.PointerTo[uint64](1763568000),
-							HeliconTimestamp:                avalancheutils.PointerTo[uint64](1790089200),
-						},
-						AvalancheContext: extras.AvalancheContext{
-							SnowCtx: mainnetCtx,
-						},
-						UpgradeConfig: extras.UpgradeConfig{
-							PrecompileUpgrades: []extras.PrecompileUpgrade{
-								{
-									Config: warp.NewDefaultConfig(
-										avalancheutils.PointerTo[uint64](1709740800), // Durango
-									),
-								},
-							},
-						},
+					&cparams.ChainConfig{
+						ApricotPhase1Timestamp:     new(uint64(1617199200)),
+						ApricotPhase2Timestamp:     new(uint64(1620644400)),
+						ApricotPhase3Timestamp:     new(uint64(1629813600)),
+						ApricotPhase4Timestamp:     new(uint64(1632344400)),
+						ApricotPhase5Timestamp:     new(uint64(1638468000)),
+						ApricotPhasePre6Timestamp:  new(uint64(1662341400)),
+						ApricotPhase6Timestamp:     new(uint64(1662494400)),
+						ApricotPhasePost6Timestamp: new(uint64(1662519600)),
+						BanffTimestamp:             new(uint64(1666108800)),
+						CortinaTimestamp:           new(uint64(1682434800)),
+						DurangoTimestamp:           new(uint64(1709740800)),
+						EtnaTimestamp:              new(uint64(1734368400)),
+						FortunaTimestamp:           new(uint64(1744124400)),
+						GraniteTimestamp:           new(uint64(1763568000)),
+						HeliconTimestamp:           new(uint64(1790089200)),
+						IglooTimestamp:             unscheduled,
+						SnowCtx:                    mainnetCtx,
 					},
 				),
 				GasLimit:   100000000,
@@ -136,7 +121,7 @@ func TestParseGenesis(t *testing.T) {
 			genesis: avalanchegenesis.FujiConfig.CChainGenesis,
 			want: &core.Genesis{
 				Config: corethparams.WithExtra(
-					&corethparams.ChainConfig{
+					&ethparams.ChainConfig{
 						ChainID:             fujiChainID,
 						HomesteadBlock:      big.NewInt(0),
 						DAOForkBlock:        big.NewInt(0),
@@ -149,41 +134,29 @@ func TestParseGenesis(t *testing.T) {
 						PetersburgBlock:     big.NewInt(0),
 						IstanbulBlock:       big.NewInt(0),
 						MuirGlacierBlock:    big.NewInt(0),
-						BerlinBlock:         big.NewInt(184985),                           // AP2 activation block
-						LondonBlock:         big.NewInt(805078),                           // AP3 activation block
-						ShanghaiTime:        avalancheutils.PointerTo[uint64](1707840000), // Durango
-						CancunTime:          avalancheutils.PointerTo[uint64](1732550400), // Etna
+						BerlinBlock:         big.NewInt(184985),      // AP2 activation block
+						LondonBlock:         big.NewInt(805078),      // AP3 activation block
+						ShanghaiTime:        new(uint64(1707840000)), // Durango
+						CancunTime:          new(uint64(1732550400)), // Etna
 					},
-					&extras.ChainConfig{
-						NetworkUpgrades: extras.NetworkUpgrades{
-							ApricotPhase1BlockTimestamp:     avalancheutils.PointerTo[uint64](1616767200),
-							ApricotPhase2BlockTimestamp:     avalancheutils.PointerTo[uint64](1620223200),
-							ApricotPhase3BlockTimestamp:     avalancheutils.PointerTo[uint64](1629140400),
-							ApricotPhase4BlockTimestamp:     avalancheutils.PointerTo[uint64](1631826000),
-							ApricotPhase5BlockTimestamp:     avalancheutils.PointerTo[uint64](1637766000),
-							ApricotPhasePre6BlockTimestamp:  avalancheutils.PointerTo[uint64](1662494400),
-							ApricotPhase6BlockTimestamp:     avalancheutils.PointerTo[uint64](1662494400),
-							ApricotPhasePost6BlockTimestamp: avalancheutils.PointerTo[uint64](1662530400),
-							BanffBlockTimestamp:             avalancheutils.PointerTo[uint64](1664805600),
-							CortinaBlockTimestamp:           avalancheutils.PointerTo[uint64](1680793200),
-							DurangoBlockTimestamp:           avalancheutils.PointerTo[uint64](1707840000),
-							EtnaTimestamp:                   avalancheutils.PointerTo[uint64](1732550400),
-							FortunaTimestamp:                avalancheutils.PointerTo[uint64](1741878000),
-							GraniteTimestamp:                avalancheutils.PointerTo[uint64](1761750000),
-							HeliconTimestamp:                avalancheutils.PointerTo[uint64](1785250800),
-						},
-						AvalancheContext: extras.AvalancheContext{
-							SnowCtx: fujiCtx,
-						},
-						UpgradeConfig: extras.UpgradeConfig{
-							PrecompileUpgrades: []extras.PrecompileUpgrade{
-								{
-									Config: warp.NewDefaultConfig(
-										avalancheutils.PointerTo[uint64](1707840000), // Durango
-									),
-								},
-							},
-						},
+					&cparams.ChainConfig{
+						ApricotPhase1Timestamp:     new(uint64(1616767200)),
+						ApricotPhase2Timestamp:     new(uint64(1620223200)),
+						ApricotPhase3Timestamp:     new(uint64(1629140400)),
+						ApricotPhase4Timestamp:     new(uint64(1631826000)),
+						ApricotPhase5Timestamp:     new(uint64(1637766000)),
+						ApricotPhasePre6Timestamp:  new(uint64(1662494400)),
+						ApricotPhase6Timestamp:     new(uint64(1662494400)),
+						ApricotPhasePost6Timestamp: new(uint64(1662530400)),
+						BanffTimestamp:             new(uint64(1664805600)),
+						CortinaTimestamp:           new(uint64(1680793200)),
+						DurangoTimestamp:           new(uint64(1707840000)),
+						EtnaTimestamp:              new(uint64(1732550400)),
+						FortunaTimestamp:           new(uint64(1741878000)),
+						GraniteTimestamp:           new(uint64(1761750000)),
+						HeliconTimestamp:           new(uint64(1785250800)),
+						IglooTimestamp:             unscheduled,
+						SnowCtx:                    fujiCtx,
 					},
 				),
 				GasLimit:   100000000,
@@ -203,7 +176,7 @@ func TestParseGenesis(t *testing.T) {
 			genesis: avalanchegenesis.LocalConfig.CChainGenesis,
 			want: &core.Genesis{
 				Config: corethparams.WithExtra(
-					&corethparams.ChainConfig{
+					&ethparams.ChainConfig{
 						ChainID:             big.NewInt(43112),
 						HomesteadBlock:      big.NewInt(0),
 						DAOForkBlock:        big.NewInt(0),
@@ -221,36 +194,24 @@ func TestParseGenesis(t *testing.T) {
 						ShanghaiTime:        initiallyActive, // Durango
 						CancunTime:          initiallyActive, // Etna
 					},
-					&extras.ChainConfig{
-						NetworkUpgrades: extras.NetworkUpgrades{
-							ApricotPhase1BlockTimestamp:     initiallyActive,
-							ApricotPhase2BlockTimestamp:     initiallyActive,
-							ApricotPhase3BlockTimestamp:     initiallyActive,
-							ApricotPhase4BlockTimestamp:     initiallyActive,
-							ApricotPhase5BlockTimestamp:     initiallyActive,
-							ApricotPhasePre6BlockTimestamp:  initiallyActive,
-							ApricotPhase6BlockTimestamp:     initiallyActive,
-							ApricotPhasePost6BlockTimestamp: initiallyActive,
-							BanffBlockTimestamp:             initiallyActive,
-							CortinaBlockTimestamp:           initiallyActive,
-							DurangoBlockTimestamp:           initiallyActive,
-							EtnaTimestamp:                   initiallyActive,
-							FortunaTimestamp:                initiallyActive,
-							GraniteTimestamp:                initiallyActive,
-							HeliconTimestamp:                unscheduled,
-						},
-						AvalancheContext: extras.AvalancheContext{
-							SnowCtx: localCtx,
-						},
-						UpgradeConfig: extras.UpgradeConfig{
-							PrecompileUpgrades: []extras.PrecompileUpgrade{
-								{
-									Config: warp.NewDefaultConfig(
-										initiallyActive, // Durango
-									),
-								},
-							},
-						},
+					&cparams.ChainConfig{
+						ApricotPhase1Timestamp:     initiallyActive,
+						ApricotPhase2Timestamp:     initiallyActive,
+						ApricotPhase3Timestamp:     initiallyActive,
+						ApricotPhase4Timestamp:     initiallyActive,
+						ApricotPhase5Timestamp:     initiallyActive,
+						ApricotPhasePre6Timestamp:  initiallyActive,
+						ApricotPhase6Timestamp:     initiallyActive,
+						ApricotPhasePost6Timestamp: initiallyActive,
+						BanffTimestamp:             initiallyActive,
+						CortinaTimestamp:           initiallyActive,
+						DurangoTimestamp:           initiallyActive,
+						EtnaTimestamp:              initiallyActive,
+						FortunaTimestamp:           initiallyActive,
+						GraniteTimestamp:           initiallyActive,
+						HeliconTimestamp:           initiallyActive,
+						IglooTimestamp:             unscheduled,
+						SnowCtx:                    localCtx,
 					},
 				),
 				Timestamp:  *initiallyActive, // the local genesis time coincides with initial activation
@@ -351,7 +312,7 @@ func TestParseGenesis(t *testing.T) {
 			}
 			opts := cmp.Options{
 				cmputils.BigInts(),
-				cmp.Comparer(func(a, b *corethparams.ChainConfig) bool {
+				cmp.Comparer(func(a, b *ethparams.ChainConfig) bool {
 					return reflect.DeepEqual(a, b)
 				}),
 			}
@@ -385,7 +346,7 @@ func TestGenesisHash(t *testing.T) {
 		{
 			name:      "local",
 			networkID: constants.LocalID,
-			want:      "0x608ddbd611241719b64642d8e152537e2a5bdf46b6ddb9e8f15340c5e007b8b1",
+			want:      "0xa8ba8fe99b2affb0ed27d0d8c825f6292c3c6f5eb9d53707504bea02ac9c1a9b",
 		},
 	}
 	for _, test := range tests {
@@ -435,6 +396,7 @@ func TestHistoricalGenesisHashes(t *testing.T) {
 		// Added the SAE fields: the ACP-176 target exponent, the ACP-283 min
 		// price exponent, and the settlement markers.
 		upgradetest.Helicon: "0xa8ba8fe99b2affb0ed27d0d8c825f6292c3c6f5eb9d53707504bea02ac9c1a9b",
+		upgradetest.Igloo:   "0xa8ba8fe99b2affb0ed27d0d8c825f6292c3c6f5eb9d53707504bea02ac9c1a9b",
 	}
 	_ = hashes[upgradetest.Latest] // Enforce completeness at compile time.
 
@@ -621,17 +583,18 @@ func TestWriteGenesis(t *testing.T) {
 			genesisHash := block.Hash()
 			gotConfig := rawdb.ReadChainConfig(db, genesisHash)
 			cmpBaseConfig := cmp.Options{
-				cmpopts.IgnoreUnexported(corethparams.ChainConfig{}),
+				cmpopts.IgnoreUnexported(ethparams.ChainConfig{}),
 				cmputils.BigInts(),
 			}
 			if diff := cmp.Diff(g.Config, gotConfig, cmpBaseConfig); diff != "" {
 				t.Errorf("initial stored base config (-want +got)\n%s", diff)
 			}
 
-			cmpNetworkUpgrades := cmp.Transformer("networkUpgrades", func(c *corethparams.ChainConfig) extras.NetworkUpgrades {
-				return corethparams.GetExtra(c).NetworkUpgrades
-			})
-			if diff := cmp.Diff(g.Config, gotConfig, cmpNetworkUpgrades); diff != "" {
+			cmpExtras := []cmp.Option{
+				cmp.Transformer("cparams", corethparams.GetExtra),
+				cmpopts.IgnoreFields(cparams.ChainConfig{}, "SnowCtx"), // contains lock
+			}
+			if diff := cmp.Diff(g.Config, gotConfig, cmpExtras...); diff != "" {
 				t.Errorf("initial stored network upgrades (-want +got)\n%s", diff)
 			}
 
@@ -656,7 +619,7 @@ func TestWriteGenesis(t *testing.T) {
 			if diff := cmp.Diff(g.Config, gotConfig, cmpBaseConfig); diff != "" {
 				t.Errorf("stored base config after restart (-want +got)\n%s", diff)
 			}
-			if diff := cmp.Diff(g.Config, gotConfig, cmpNetworkUpgrades); diff != "" {
+			if diff := cmp.Diff(g.Config, gotConfig, cmpExtras...); diff != "" {
 				t.Errorf("stored network upgrades after restart (-want +got)\n%s", diff)
 			}
 		})

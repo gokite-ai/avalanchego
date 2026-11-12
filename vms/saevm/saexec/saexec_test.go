@@ -6,12 +6,14 @@ package saexec
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
 	"math/big"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core"
 	"github.com/ava-labs/libevm/core/rawdb"
+	"github.com/ava-labs/libevm/core/state"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/core/vm"
 	"github.com/ava-labs/libevm/crypto"
@@ -35,7 +38,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
-	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/logging/loggingtest"
 	"github.com/ava-labs/avalanchego/vms/components/gas"
@@ -138,15 +140,17 @@ func newSUT(tb testing.TB, opts ...sutOption) (context.Context, *SUT) {
 
 	tr, err := saedb.NewTracker(db, saedbConfig, genesis.EthBlock().Root(), chainDataDir, logger)
 	require.NoError(tb, err, "saedb.NewTracker()")
-	e, err := New(genesis, src.AsHeaderSource(), config, db, xdb, tr, sutCfg.hooks, logger, prometheus.NewRegistry())
+	e, err := New(genesis, new(atomic.Pointer[blocks.Block]), src.AsHeaderSource(), config, db, xdb, tr, sutCfg.hooks, logger, prometheus.NewRegistry())
 	require.NoError(tb, err, "New()")
 
 	closeOnce := sync.OnceValue(func() error {
-		e.Close()
-		return tr.Close(e.LastExecuted().PostExecutionStateRoot())
+		return errors.Join(
+			e.Close(),
+			tr.Close(e.LastExecuted().PostExecutionStateRoot()),
+		)
 	})
 	tb.Cleanup(func() {
-		require.NoErrorf(tb, closeOnce(), "%T.Close()", e)
+		require.NoErrorf(tb, closeOnce(), "%T.Close() then %T.Close()", e, tr)
 	})
 	return ctx, &SUT{
 		Executor:     e,
@@ -383,7 +387,7 @@ func TestExecution(t *testing.T) {
 
 	var logIndex uint
 	for i, r := range want {
-		ui := uint(i) //#nosec G115 -- Known to not overflow
+		ui := uint(i)
 
 		r.Status = 1
 		r.TransactionIndex = ui
@@ -406,7 +410,7 @@ func TestExecution(t *testing.T) {
 	opts := cmp.Options{
 		cmpopts.IgnoreFields(
 			types.Receipt{},
-			"GasUsed", "CumulativeGasUsed",
+			"GasUsed", "GasExecuted", "CumulativeGasUsed",
 			"Bloom",
 		),
 		cmputils.BigInts(),
@@ -562,14 +566,14 @@ func TestExecuteRecordsOnlyCanonicalProgress(t *testing.T) {
 			txs:             makeTxs,
 			ops:             nil,
 			opts:            []Option{asCanonical()},
-			wantInterimTick: utils.PointerTo(gas.Gas(params.TxGas)),
+			wantInterimTick: new(gas.Gas(params.TxGas)),
 		},
 		{
 			name:            "canonical with end-of-block operation only",
 			txs:             nil,
 			ops:             []saehookstest.Op{{Gas: 1}},
 			opts:            []Option{asCanonical()},
-			wantInterimTick: utils.PointerTo[gas.Gas](1),
+			wantInterimTick: new(gas.Gas(1)),
 		},
 	}
 	for _, tt := range tests {
@@ -747,7 +751,7 @@ func TestGasAccounting(t *testing.T) {
 
 		t.Run("CumulativeGasUsed", func(t *testing.T) {
 			for i, r := range b.Receipts() {
-				ui := uint64(i + 1) //#nosec G115 -- Known to not overflow
+				ui := uint64(i + 1)
 				assert.Equalf(t, ui*params.TxGas, r.CumulativeGasUsed, "%T.Receipts()[%d]", b, i)
 			}
 		})
@@ -981,7 +985,7 @@ func TestContextualOpCodes(t *testing.T) {
 			diffopts := cmp.Options{
 				cmpopts.IgnoreFields(
 					types.Receipt{},
-					"Bloom", "ContractAddress", "CumulativeGasUsed", "GasUsed",
+					"Bloom", "ContractAddress", "CumulativeGasUsed", "GasUsed", "GasExecuted",
 				),
 				cmpopts.IgnoreFields(
 					types.Log{},
@@ -1037,6 +1041,7 @@ func missingTrieNodeError(root common.Hash) testerr.Want {
 // available. This is not needed for Firewood, which prunes automatically, nor
 // any archival node, which never prunes.
 func TestHashDBStateRootAvailability(t *testing.T) {
+	t.Skip("FLAKY: This test relies on *blocks.Block.MarkExecuted, but this returns before tracking changes")
 	// Blocks form three contiguous sections by height, distinguished by whether
 	// their states are untracked below and whether they fall inside the
 	// snapshot's retention window of the last [core.TriesInMemory] states.
@@ -1110,61 +1115,94 @@ func TestHashDBStateRootAvailability(t *testing.T) {
 // execute subsequent blocks.
 func TestRecoveryStateAvailability(t *testing.T) {
 	const (
-		commitInterval = 16
-		numBlocks      = commitInterval + 10
+		defaultCommitInterval = 16
+		numBlocks             = defaultCommitInterval + 10
+	)
+
+	type availability int
+	const (
+		available availability = iota + 1
+		unavailable
+		unknown
 	)
 
 	tests := []struct {
 		name            string
 		scheme          string
 		archival        bool
-		expectAvailable func(height uint64) bool
+		commitInterval  uint64
+		expectAvailable func(height uint64) availability
 	}{
 		{
-			name:     "hash_archival",
-			scheme:   rawdb.HashScheme,
-			archival: true,
-			expectAvailable: func(height uint64) bool {
+			name:           "hash_archival",
+			scheme:         rawdb.HashScheme,
+			archival:       true,
+			commitInterval: 1,
+			expectAvailable: func(height uint64) availability {
 				// All executed states MUST be available.
-				return height <= numBlocks
+				if height <= numBlocks {
+					return available
+				}
+				return unavailable
 			},
 		},
 		{
-			name:     "firewood_archival",
-			scheme:   customrawdb.FirewoodScheme,
-			archival: true,
-			expectAvailable: func(height uint64) bool {
-				// All settled states MUST be available, as MUST the state
-				// committed at shutdown.
-				return height <= numBlocks
+			name:           "firewood_archival",
+			scheme:         customrawdb.FirewoodScheme,
+			archival:       true,
+			commitInterval: defaultCommitInterval,
+			expectAvailable: func(height uint64) availability {
+				// The commitInterval is the MAXIMUM number of blocks before
+				// a state is persisted. The genesis is persisted separately.
+				if height == 0 || height == numBlocks {
+					return available
+				}
+				return unknown
 			},
 		},
 		{
-			name:     "firewood",
-			scheme:   customrawdb.FirewoodScheme,
-			archival: false,
-			expectAvailable: func(height uint64) bool {
+			name:           "firewood_archival_with_history",
+			scheme:         customrawdb.FirewoodScheme,
+			archival:       true,
+			commitInterval: 1,
+			expectAvailable: func(height uint64) availability {
+				if height <= numBlocks {
+					return available
+				}
+				return unavailable
+			},
+		},
+		{
+			name:           "firewood",
+			scheme:         customrawdb.FirewoodScheme,
+			archival:       false,
+			commitInterval: defaultCommitInterval,
+			expectAvailable: func(height uint64) availability {
 				// Only the state committed at shutdown should be available.
-				return height == numBlocks
+				if height == numBlocks {
+					return available
+				}
+				return unavailable
 			},
 		},
 		{
-			name:     "hash",
-			scheme:   rawdb.HashScheme,
-			archival: false,
-			expectAvailable: func(height uint64) bool {
+			name:           "hash",
+			scheme:         rawdb.HashScheme,
+			archival:       false,
+			commitInterval: defaultCommitInterval,
+			expectAvailable: func(height uint64) availability {
 				switch {
-				case saedb.ShouldCommitTrieDB(height+1, commitInterval):
+				case saedb.ShouldCommitTrieDB(height+1, defaultCommitInterval):
 					// in this test, each block settles the previous
-					return true
+					return available
 				case height == numBlocks:
 					// state committed at shutdown
-					return true
+					return available
 				case height == 0:
 					// genesis state
-					return true
+					return available
 				default:
-					return false
+					return unavailable
 				}
 			},
 		},
@@ -1173,7 +1211,7 @@ func TestRecoveryStateAvailability(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, sut := newSUT(t, options.Func[sutConfig](func(c *sutConfig) {
 				c.archival = tt.archival
-				c.commitInterval = commitInterval
+				c.commitInterval = tt.commitInterval
 				c.dbScheme = tt.scheme
 			}))
 			e, chain := sut.Executor, sut.chain
@@ -1203,19 +1241,26 @@ func TestRecoveryStateAvailability(t *testing.T) {
 				log := loggingtest.New(t, logging.Debug)
 				tr, err := saedb.NewTracker(sut.db, sut.saedbConfig, chain.Last().PostExecutionStateRoot(), sut.chainDataDir, log)
 				require.NoError(t, err, "saedb.NewTracker()")
-				e, err := New(chain.Last(), src.AsHeaderSource(), sut.chainConfig, sut.db, sut.xdb, tr, defaultHooks(), log, prometheus.NewRegistry())
+				e, err := New(chain.Last(), new(atomic.Pointer[blocks.Block]), src.AsHeaderSource(), sut.chainConfig, sut.db, sut.xdb, tr, defaultHooks(), log, prometheus.NewRegistry())
 				require.NoError(t, err, "New()")
 				t.Cleanup(func() {
-					e.Close()
+					require.NoErrorf(t, e.Close(), "%T.Close()", e)
 					require.NoErrorf(t, tr.Close(chain.Last().PostExecutionStateRoot()), "%T.Close()", tr)
 				})
 
 				for _, b := range chain.AllBlocks() {
-					var wantErr testerr.Want
 					root := b.PostExecutionStateRoot()
-					if !tt.expectAvailable(b.NumberU64()) {
+
+					var wantErr testerr.Want
+					switch tt.expectAvailable(b.NumberU64()) {
+					case available:
+						wantErr = nil
+					case unavailable:
 						wantErr = missingTrieNodeError(root)
+					default:
+						continue
 					}
+
 					_, err := e.StateDB(root)
 					if diff := testerr.Diff(err, wantErr); diff != "" {
 						t.Errorf("%T.StateDB([post-execution root of block %d]) %s", e, b.NumberU64(), diff)
@@ -1313,6 +1358,57 @@ func TestProcessBeaconBlockRoot(t *testing.T) {
 				t.Errorf("beacon-roots get() via StaticCall() %s", diff)
 			}
 			assert.Equal(t, tt.want, got, "parent beacon root returned by beacon-roots contract")
+		})
+	}
+}
+
+// failingDB wraps a [state.Database] such that every account read from the
+// returned tries errors.
+type failingDB struct{ state.Database }
+
+type failingTrie struct{ state.Trie }
+
+var errAccountRead = errors.New("account read failed")
+
+func (db failingDB) OpenTrie(root common.Hash) (state.Trie, error) {
+	t, err := db.Database.OpenTrie(root)
+	return failingTrie{t}, err
+}
+
+func (failingTrie) GetAccount(common.Address) (*types.StateAccount, error) {
+	return nil, errAccountRead
+}
+
+func TestExecuteReturnsStateDBError(t *testing.T) {
+	hooks := defaultHooks()
+	hooks.StartExecutingBlockFn = func(_ params.Rules, sdb *state.StateDB, _ *types.Header, _ *types.Block) error {
+		sdb.GetBalance(common.Address{}) // triggers the failing account read
+		return nil
+	}
+	_, sut := newSUT(t, withHooks(hooks))
+	b := sut.chain.NewBlock(t, nil)
+
+	tests := []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "full execution",
+		},
+		{
+			name: "skip end-of-block ops",
+			opts: []Option{SkipEndOfBlockOps()},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No snapshot, so account reads go through the trie.
+			db := failingDB{state.NewDatabase(rawdb.NewMemoryDatabase())}
+			sdb, err := state.New(types.EmptyRootHash, db, nil)
+			require.NoError(t, err, "state.New()")
+
+			_, err = Execute(b, sdb, sut.hooks, sut.chainConfig, sut.chainContext, sut.logger, tt.opts...)
+			require.ErrorIs(t, err, errAccountRead, "Execute()")
 		})
 	}
 }

@@ -8,7 +8,10 @@ func Zero[T any]() (_ T) {
 	return
 }
 
-// PointerTo returns a pointer to the provided value.
-func PointerTo[T any](v T) *T {
-	return &v
+// PtrEqual returns true if x and y are both nil or both point to equal values.
+func PtrEqual[T comparable](x, y *T) bool {
+	if x == nil || y == nil {
+		return x == y
+	}
+	return *x == *y
 }

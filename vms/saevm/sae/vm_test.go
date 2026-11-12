@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math/big"
 	"math/rand/v2"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
@@ -25,7 +26,6 @@ import (
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/core/vm"
 	"github.com/ava-labs/libevm/crypto"
-	"github.com/ava-labs/libevm/ethclient"
 	"github.com/ava-labs/libevm/ethdb"
 	"github.com/ava-labs/libevm/libevm"
 	"github.com/ava-labs/libevm/libevm/options"
@@ -53,6 +53,8 @@ import (
 	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/version"
+	"github.com/ava-labs/avalanchego/vms/evm/evmclient"
+	"github.com/ava-labs/avalanchego/vms/evm/sync/customrawdb"
 	"github.com/ava-labs/avalanchego/vms/saevm/adaptor"
 	"github.com/ava-labs/avalanchego/vms/saevm/blocks"
 	"github.com/ava-labs/avalanchego/vms/saevm/blocks/blockstest"
@@ -86,18 +88,17 @@ var _ saetest.Peer = (*SUT)(nil)
 // avoid over-reliance on internal implementation details.
 type SUT struct {
 	block.ChainVM
-	*ethclient.Client
+	*evmclient.Client
 
 	wallet *saetest.Wallet
 	db     ethdb.Database
 	hooks  *hookstest.Stub
-	logger *loggingtest.Logger
+	logger logging.Logger
 	sender *saetest.Sender
 
-	rpcClient *rpc.Client
-	rawVM     *VM
-	genesis   *blocks.Block
-	close     func()
+	rawVM   *VM
+	genesis *blocks.Block
+	close   func()
 }
 
 func (s *SUT) NodeID() ids.NodeID      { return s.rawVM.snowCtx.NodeID }
@@ -105,15 +106,17 @@ func (s *SUT) Sender() *saetest.Sender { return s.sender }
 
 type (
 	sutConfig struct {
-		hooks       *hookstest.Stub
-		vmConfig    Config
-		logLevel    logging.Level
-		genesis     core.Genesis
-		db          database.Database
-		precompiles map[common.Address]libevm.PrecompiledContract
-		nodeID      ids.NodeID
-		validators  set.Set[ids.NodeID]
-		dataDir     string
+		hooks           *hookstest.Stub
+		vmConfig        Config
+		logger          logging.Logger
+		logLevel        logging.Level // ignored if logger is non-nil
+		genesis         core.Genesis
+		db              database.Database
+		precompiles     map[common.Address]libevm.PrecompiledContract
+		nodeID          ids.NodeID
+		validators      set.Set[ids.NodeID]
+		dataDir         string
+		wantShutdownErr testerr.Want
 	}
 	sutOption = options.Option[sutConfig]
 )
@@ -178,10 +181,19 @@ func tryNewSUT(tb testing.TB, numAccounts uint, opts ...sutOption) (*SUT, error)
 	vm := NewSinceGenesis(conf.hooks, conf.vmConfig)
 	snow := adaptor.Convert(vm)
 
-	logger := loggingtest.New(tb, conf.logLevel)
-	ctx := logger.CancelOnError(tb.Context())
+	ctx := tb.Context()
+	switch l := conf.logger.(type) {
+	case nil:
+		ll := loggingtest.New(tb, conf.logLevel)
+		conf.logger = ll
+		ctx = ll.CancelOnError(ctx)
+
+	case *loggingtest.Logger:
+		ctx = l.CancelOnError(ctx)
+	}
+
 	snowCtx := snowtest.Context(tb, chainID)
-	snowCtx.Log = logger
+	snowCtx.Log = conf.logger
 	snowCtx.ChainDataDir = conf.dataDir
 	snowCtx.NodeID = conf.nodeID
 	saetest.SetValidators(tb, snowCtx.ValidatorState, conf.validators)
@@ -212,7 +224,9 @@ func tryNewSUT(tb testing.TB, numAccounts uint, opts ...sutOption) (*SUT, error)
 	closeOnce := sync.OnceFunc(func() {
 		ctx := context.WithoutCancel(tb.Context())
 		require.NoError(tb, vm.last.accepted.Load().WaitUntilExecuted(ctx), "{last-accepted block}.WaitUntilExecuted()")
-		require.NoError(tb, snow.Shutdown(ctx), "Shutdown()")
+		if diff := testerr.Diff(snow.Shutdown(ctx), conf.wantShutdownErr); diff != "" {
+			tb.Errorf("%T.Shutdown() %s", snow, diff)
+		}
 	})
 	tb.Cleanup(closeOnce)
 
@@ -220,10 +234,10 @@ func tryNewSUT(tb testing.TB, numAccounts uint, opts ...sutOption) (*SUT, error)
 	// don't need to treat our node as a special case.
 	require.NoErrorf(tb, snow.Connected(ctx, snowCtx.NodeID, version.Current), "Connected(%s)", snowCtx.NodeID)
 
-	rpcClient, ethClient := dialRPC(ctx, tb, snow)
+	rpcClient := dialRPC(ctx, tb, snow, "ws", wsHTTPExtensionPath)
 	sut := &SUT{
 		ChainVM: snow,
-		Client:  ethClient,
+		Client:  evmclient.New(rpcClient),
 
 		wallet: saetest.NewWalletWithKeyChain(
 			keys,
@@ -231,13 +245,12 @@ func tryNewSUT(tb testing.TB, numAccounts uint, opts ...sutOption) (*SUT, error)
 		),
 		db:     saetypes.NewEthDB(conf.db),
 		hooks:  conf.hooks,
-		logger: logger,
+		logger: conf.logger,
 		sender: sender,
 
-		rpcClient: rpcClient,
-		rawVM:     vm.VM,
-		genesis:   vm.last.settled.Load(),
-		close:     closeOnce,
+		rawVM:   vm.VM,
+		genesis: vm.last.settled.Load(),
+		close:   closeOnce,
 	}
 	sender.Start(tb, sut)
 	return sut, nil
@@ -251,19 +264,36 @@ func newSUT(tb testing.TB, numAccounts uint, opts ...sutOption) (context.Context
 	return sut.context(tb), sut
 }
 
-func dialRPC(ctx context.Context, tb testing.TB, snow block.ChainVM) (*rpc.Client, *ethclient.Client) {
+// dialRPC serves the handler that snow creates for the HTTP extension `path`
+// and returns a client connected to it via `scheme`, typically "ws" for
+// [wsHTTPExtensionPath] or "http" for [rpcHTTPExtensionPath].
+func dialRPC(ctx context.Context, tb testing.TB, snow block.ChainVM, scheme, path string) *rpc.Client {
 	tb.Helper()
 
 	handlers, err := snow.CreateHandlers(ctx)
 	require.NoErrorf(tb, err, "%T.CreateHandlers()", snow)
-	server := httptest.NewServer(handlers[wsHTTPExtensionPath])
-	tb.Cleanup(server.Close)
-	rpcClient, err := rpc.Dial("ws://" + server.Listener.Addr().String())
-	require.NoErrorf(tb, err, "rpc.Dial(http.NewServer(%T.CreateHandlers()))", snow)
-	client := ethclient.NewClient(rpcClient)
-	tb.Cleanup(client.Close)
 
-	return rpcClient, client
+	// [http.StateHijacked] immediately removes the connection from the
+	// [httptest.Server]'s internal waitgroup, so it doesn't wait on
+	// [httptest.Server.Close] for the websocket connection to close. However,
+	// the [http.Handler] still doesn't return until the websocket is closed AND
+	// all inflight calls have completed. See additional documentation of this
+	// behavior at [http.Server.RegisterOnShutdown].
+	var inflight sync.WaitGroup
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inflight.Add(1)
+		defer inflight.Done()
+		handlers[path].ServeHTTP(w, r)
+	})
+	tb.Cleanup(inflight.Wait)
+	server := httptest.NewServer(h)
+	tb.Cleanup(server.Close)
+
+	url := scheme + "://" + server.Listener.Addr().String()
+	client, err := rpc.DialContext(ctx, url)
+	require.NoErrorf(tb, err, "rpc.DialContext(ctx, %q)", url)
+	tb.Cleanup(client.Close)
+	return client
 }
 
 func marshalJSON(tb testing.TB, v any) []byte {
@@ -273,13 +303,6 @@ func marshalJSON(tb testing.TB, v any) []byte {
 	return buf
 }
 
-// CallContext propagates its arguments to and from [SUT.rpcClient.CallContext].
-// Embedding both the [ethclient.Client] and the underlying [rpc.Client] isn't
-// possible due to a name conflict, so this method is manually exposed.
-func (s *SUT) CallContext(ctx context.Context, result any, method string, args ...any) error {
-	return s.rpcClient.CallContext(ctx, result, method, args...)
-}
-
 // withVMTime returns an option to configure a new SUT's "now" function along
 // with a [saetest.Clock] to access and advance the time at nanosecond
 // resolution.
@@ -287,8 +310,6 @@ func withVMTime(tb testing.TB, startTime time.Time) (sutOption, *saetest.Clock) 
 	tb.Helper()
 	c := saetest.NewClock(startTime, time.Nanosecond)
 	opt := options.Func[sutConfig](func(cfg *sutConfig) {
-		// TODO(StephenButtolph) unify the time functions provided in the config
-		// and the hooks.
 		cfg.hooks.Now = c.Now
 		cfg.vmConfig.Now = c.Now
 	})
@@ -306,9 +327,30 @@ func withExecResultsDB(hdb database.HeightIndex) sutOption {
 	})
 }
 
-func withCommitInterval(interval uint64) sutOption { //nolint:unparam // always 16 for now but caller-controlled by design
+func withCommitInterval(interval uint64) sutOption {
 	return options.Func[sutConfig](func(c *sutConfig) {
 		c.vmConfig.DBConfig.CommitInterval = interval
+	})
+}
+
+func withDB(db database.Database) sutOption {
+	return options.Func[sutConfig](func(c *sutConfig) {
+		c.db = db
+	})
+}
+
+// withFirewood selects Firewood as the trie database instead of the default
+// HashDB.
+func withFirewood() sutOption {
+	return options.Func[sutConfig](func(c *sutConfig) {
+		c.vmConfig.DBConfig.Scheme = customrawdb.FirewoodScheme
+	})
+}
+
+// withArchival disables pruning, persisting every executed state root.
+func withArchival() sutOption {
+	return options.Func[sutConfig](func(c *sutConfig) {
+		c.vmConfig.DBConfig.Archival = true
 	})
 }
 
@@ -360,13 +402,16 @@ func registerPrecompiles(tb testing.TB, precompiles map[common.Address]libevm.Pr
 	h.Register(tb)
 }
 
-// context returns a [context.Context], derived from the [testing.TB], that is
-// cancelled if the SUT's default logger receives a log at [logging.Error] or
-// higher.
+// context returns a [context.Context], derived from the [testing.TB]. If the
+// SUT's default logger is a [loggingtest.Logger], the returned context is
+// cancelled if said logger receives a log at [logging.Error] or higher.
 //
 //nolint:thelper // Not a helper
 func (s *SUT) context(tb testing.TB) context.Context {
-	return s.logger.CancelOnError(tb.Context())
+	if l, ok := s.logger.(*loggingtest.Logger); ok {
+		return l.CancelOnError(tb.Context())
+	}
+	return tb.Context()
 }
 
 // mustSendTx guarantees all transactions are delivered to the mempool, which triggers

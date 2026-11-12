@@ -8,7 +8,10 @@ go_library(
         "blocks.go",
         "custom.go",
         "debug.go",
+        "filters.go",
         "gasprice.go",
+        "gasused.go",
+        "headers.go",
         "indexing.go",
         "mempool.go",
         "net.go",
@@ -61,13 +64,17 @@ go_library(
         "@com_github_ava_labs_libevm//params",
         "@com_github_ava_labs_libevm//rlp",
         "@com_github_ava_labs_libevm//rpc",
+        "@com_github_ava_labs_libevm//trie",
         "@org_uber_go_zap//:zap",
     ],
 )
 
 go_test(
     name = "rpc_test",
-    srcs = ["custom_test.go"],
+    srcs = [
+        "custom_test.go",
+        "headers_test.go",
+    ],
     embed = [":rpc"],
     deps = [
         "@com_github_ava_labs_libevm//common/hexutil",

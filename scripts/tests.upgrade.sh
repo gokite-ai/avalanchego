@@ -16,8 +16,8 @@ fi
 # local network, this flag must be updated to the last compatible
 # version with the latest code.
 #
-# v1.14.0 is the earliest version that supports Granite.
-DEFAULT_VERSION="1.14.0"
+# v1.15.1 is the earliest version that activates Helicon on local networks.
+DEFAULT_VERSION="1.15.1"
 
 VERSION="${1:-${DEFAULT_VERSION}}"
 if [[ -z "${VERSION}" ]]; then
@@ -45,7 +45,7 @@ rm -rf "/tmp/avalanchego-v${VERSION}"
 rm -rf /tmp/avalanchego-build
 
 echo "downloading avalanchego ${VERSION} at ${DOWNLOAD_URL}"
-curl -L "${DOWNLOAD_URL}" -o "${DOWNLOAD_PATH}"
+curl -fL "${DOWNLOAD_URL}" -o "${DOWNLOAD_PATH}"
 
 echo "extracting downloaded avalanchego"
 if [[ ${GOOS} == "linux" ]]; then
@@ -65,6 +65,6 @@ source ./scripts/constants.sh
 #################################
 # By default, it runs all upgrade test cases!
 echo "running upgrade tests against the local cluster with ${AVALANCHEGO_PATH}"
-./bin/ginkgo -v ./tests/upgrade -- \
+"${GINKGO_PATH:-./bin/ginkgo}" -v "${E2E_TARGET:-./tests/upgrade}" -- \
   --avalanchego-path="/tmp/avalanchego-v${VERSION}/avalanchego" \
   --avalanchego-path-to-upgrade-to="${AVALANCHEGO_PATH}"
