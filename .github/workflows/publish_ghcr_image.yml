@@ -20,6 +20,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # Upstream's run_task.sh no longer bootstraps Task in CI; this installs the pinned Task and Go.
+      - uses: ./.github/actions/setup-go-for-project
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -63,6 +65,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # Upstream's run_task.sh no longer bootstraps Task in CI; this installs the pinned Task and Go.
+      - uses: ./.github/actions/setup-go-for-project
 
       - name: Install qemu (required for cross-platform builds)
         run: |
