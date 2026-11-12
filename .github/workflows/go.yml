@@ -31,9 +31,7 @@ jobs:
 
   build-antithesis-images-subnet-evm:
     needs: setup-cache-linux-amd64
-    # Use a faster runner pending migration to bazel. The default free runners result
-    # in 20+ minute runtime, slowing down every PR and merge queue CI run.
-    runs-on: ubuntu-24.04-amd64-4-core
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Check image build for subnet-evm test setup
@@ -154,9 +152,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The default free runners lack the resources for parallel execution, so
-        # a beefier runner is required.
-        os: [ubuntu-24.04-amd64-4-core]
+        os: [ubuntu-24.04]
+    env:
+      # Keep every spec and run local test networks sequentially on the standard VM.
+      E2E_SERIAL: "1"
     steps:
       - uses: actions/checkout@v5
       - name: Run e2e tests

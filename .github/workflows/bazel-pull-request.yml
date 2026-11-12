@@ -38,7 +38,7 @@ jobs:
     with:
       platform_name: linux-amd64
       runner: ubuntu-24.04
-      e2e_runner: ubuntu-24.04-amd64-4-core
+      run_e2e_serially: true
       unit_test_task: bazel-test-unit-race
       run_monitored_tests: true
     secrets: inherit

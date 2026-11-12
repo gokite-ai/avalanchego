@@ -12,7 +12,9 @@ jobs:
       - uses: ./.github/actions/setup-go-for-project
       - uses: docker/setup-buildx-action@v3
       - name: Build the exact checked-out node and plugin together
-        run: bash scripts/build_candidate_pair.sh "$RUNNER_TEMP/candidate-evidence"
+        env:
+          CANDIDATE_EVIDENCE_DIR: ${{ runner.temp }}/candidate-evidence
+        run: ./scripts/run_task.sh build-candidate-pair
       - name: Upload version, source, image and handshake evidence
         if: always()
         uses: actions/upload-artifact@v4
