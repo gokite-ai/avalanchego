@@ -1,3 +1,6 @@
+// Copyright (C) 2019, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE for licensing terms.
+
 // A subprocess handshake only: no VM Initialize, chain, database or staking identity.
 package main
 
@@ -15,9 +18,11 @@ import (
 	"github.com/ava-labs/avalanchego/vms/rpcchainvm/runtime/subprocess"
 )
 
+const pluginPath = "/plugins-template/subnet-evm"
+
 func main() {
-	if len(os.Args) != 2 {
-		panic("usage: candidate-handshake /path/to/subnet-evm")
+	if len(os.Args) != 2 || os.Args[1] != pluginPath {
+		panic("usage: candidate-handshake /plugins-template/subnet-evm")
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -26,7 +31,7 @@ func main() {
 	defer listener.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	status, stopper, err := subprocess.Bootstrap(ctx, listener, exec.Command(os.Args[1]), &subprocess.Config{
+	status, stopper, err := subprocess.Bootstrap(ctx, listener, exec.Command(pluginPath), &subprocess.Config{
 		Stdout: io.Discard, Stderr: io.Discard,
 		HandshakeTimeout: 10 * time.Second, Log: logging.NoLog{},
 	})
