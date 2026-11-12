@@ -1,0 +1,37 @@
+# Both programs and their handshake host are built from one source tree.
+# No registry publication or chain startup is part of this Dockerfile.
+ARG GO_IMAGE
+ARG RUNTIME_IMAGE
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS builder
+ENV GOPROXY=file:///gomodproxy,off GOTOOLCHAIN=local \
+    GOFLAGS=-p=2 GOMAXPROCS=2 GOMEMLIMIT=1500MiB
+WORKDIR /build
+ARG TARGETARCH
+ARG BUILDARCH
+RUN if [ "$TARGETARCH" = amd64 ] && [ "$BUILDARCH" != amd64 ]; then \
+      apt-get update && apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross && \
+      echo 'export CC=x86_64-linux-gnu-gcc' > /build-env; \
+    elif [ "$TARGETARCH" = "$BUILDARCH" ]; then echo 'export CC=gcc' > /build-env; \
+    else echo 'Candidate validation supports linux/amd64 only' >&2; exit 1; fi && \
+    . /build-env && \
+    printf '#include <stdlib.h>\nint main(void) { return 0; }\n' | "$CC" -x c - -o /tmp/candidate-cgo-probe
+# Keep the toolchain layer independent of source changes; probe headers and linker first.
+COPY . .
+ARG SOURCE_COMMIT
+# constants.sh requires Bash (BASH_SOURCE and pipefail); keep toolchain layers cached.
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+RUN --network=none --mount=type=bind,from=gomodcache,source=.,target=/gomodproxy,ro \
+    . /build-env && export CC GOOS=linux GOARCH="$TARGETARCH" AVALANCHEGO_COMMIT="$SOURCE_COMMIT" && \
+    bash scripts/build.sh && \
+    bash graft/subnet-evm/scripts/build.sh /build/build/subnet-evm && \
+    . scripts/constants.sh && \
+    go build -ldflags "-X github.com/ava-labs/avalanchego/version.GitCommit=$SOURCE_COMMIT" \
+      -o /build/build/candidate-handshake ./scripts/candidate/handshake.go
+FROM ${RUNTIME_IMAGE} AS candidate
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
+COPY --from=builder /build/build/avalanchego /usr/local/bin/avalanchego
+COPY --from=builder /build/build/subnet-evm /plugins-template/subnet-evm
+COPY --from=builder /build/build/candidate-handshake /usr/local/bin/candidate-handshake
+# This image is an offline validation artifact; it deliberately has no chain wrapper.
+ENTRYPOINT ["/usr/local/bin/avalanchego"]

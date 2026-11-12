@@ -5,11 +5,17 @@ package saexec
 
 import (
 	"errors"
+	"math"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/ava-labs/avalanchego/utils/buffer"
+	"github.com/ava-labs/avalanchego/utils/math/intmath"
+	"github.com/ava-labs/avalanchego/vms/components/gas"
 	"github.com/ava-labs/avalanchego/vms/saevm/blocks"
+
+	saeparams "github.com/ava-labs/avalanchego/vms/saevm/params"
 )
 
 var (
@@ -17,6 +23,13 @@ var (
 	queueDurationBuckets = prometheus.ExponentialBuckets(time.Millisecond.Seconds(), 2, 15)
 	// executeBlockBuckets span 500µs (small block) to ~16s (large/slow block).
 	executeBlockBuckets = prometheus.ExponentialBuckets(500*time.Microsecond.Seconds(), 2, 16)
+	// gasRateHeadroomBuckets define the [rollingGasThroughput.headroom] histogram.
+	gasRateHeadroomBuckets = []float64{
+		0.8,                            // Terrain, terrain!
+		1,                              // lagging across [saeparams.Tau]: worth alerting
+		1.05, 1.1, 1.15, 1.2, 1.3, 1.4, // finer resolution when close
+		1.6, 2, 2.5, 4, 10, 30, 100, // coarser resolution when far
+	}
 )
 
 type metrics struct {
@@ -35,8 +48,9 @@ type metrics struct {
 
 	// executedGasCharged is the gas that executed blocks consumed.
 	// executedGasLimit is the worst-case gas they could have been charged.
-	executedGasCharged prometheus.Counter
-	executedGasLimit   prometheus.Counter
+	executedGasCharged        prometheus.Counter
+	executedGasLimit          prometheus.Counter
+	averageExecutedGasCharged rollingGasThroughput
 
 	// acceptedGasLimit is the acceptance-side counterpart of executedGasLimit.
 	acceptedGasLimit prometheus.Counter
@@ -58,6 +72,24 @@ type metrics struct {
 	// The target exactly matches between simulation and execution, so only
 	// one value is reported.
 	gasTarget prometheus.Gauge
+}
+
+// rollingGasThroughput tracks execution over a rolling [saeparams.Tau] window,
+// publishing after each block.
+type rollingGasThroughput struct {
+	history buffer.Deque[executionSpan]
+	total   struct {
+		gas               gas.Gas
+		wallTime, gasTime time.Duration
+	}
+
+	// headroom is the factor by which the gas rate could have been multiplied
+	// for gas- and wall-clock time to have advanced by the same duration;
+	// values below 1 mean that execution is falling behind.
+	headroom       prometheus.Histogram
+	latestHeadroom prometheus.Gauge
+	// gasPerSecond is the raw, rolling-average throughput.
+	gasPerSecond prometheus.Gauge
 }
 
 func newMetrics(reg prometheus.Registerer, lastExecuted *blocks.Block) (*metrics, error) {
@@ -92,6 +124,22 @@ func newMetrics(reg prometheus.Registerer, lastExecuted *blocks.Block) (*metrics
 			Name: "executed_gas_limit_total",
 			Help: "Cumulative worst-case gas of executed blocks, transaction gas limits plus end-of-block operation gas.",
 		}),
+		averageExecutedGasCharged: rollingGasThroughput{
+			history: buffer.NewUnboundedDeque[executionSpan](0),
+			headroom: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Name:    "execution_gas_rate_headroom",
+				Help:    "Factor by which the gas rate could have been multiplied for executed gas time to have equalled elapsed wall time, over a rolling window of tau execution, and observed after each block. Below 1 means execution is falling behind.",
+				Buckets: gasRateHeadroomBuckets,
+			}),
+			latestHeadroom: prometheus.NewGauge(prometheus.GaugeOpts{
+				Name: "execution_gas_rate_headroom_latest",
+				Help: "Latest value observed by execution_gas_rate_headroom.",
+			}),
+			gasPerSecond: prometheus.NewGauge(prometheus.GaugeOpts{
+				Name: "tau_second_avg_executed_gas_per_second",
+				Help: "Gas consumed per second of wall time spent executing, over a rolling tau window of execution, as of the latest executed block.",
+			}),
+		},
 		acceptedGasLimit: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "accepted_gas_limit_total",
 			Help: "Cumulative worst-case gas of blocks accepted into the execution queue.",
@@ -137,6 +185,9 @@ func newMetrics(reg prometheus.Registerer, lastExecuted *blocks.Block) (*metrics
 		reg.Register(m.executionQueueGasLimit),
 		reg.Register(m.executedGasCharged),
 		reg.Register(m.executedGasLimit),
+		reg.Register(m.averageExecutedGasCharged.headroom),
+		reg.Register(m.averageExecutedGasCharged.latestHeadroom),
+		reg.Register(m.averageExecutedGasCharged.gasPerSecond),
 		reg.Register(m.acceptedGasLimit),
 		reg.Register(m.lastExecutedGasTime),
 		reg.Register(m.gasTimeWallTimeGap),
@@ -179,7 +230,13 @@ func (m *metrics) setExecuted(block *blocks.Block) {
 	gasTime := block.ExecutedByGasTime()
 	gasClock := gasTime.AsTime()
 	m.lastExecutedGasTime.Set(float64(gasClock.UnixNano()) / 1e9)
-	m.gasTimeWallTimeGap.Set(gasClock.Sub(block.ExecutedByWallTime()).Seconds())
+	// Restored blocks have no wall time. Subtracting the zero [time.Time]
+	// maxes out the [time.Duration], so report the gap as unknown.
+	if byWall := block.ExecutedByWallTime(); byWall.IsZero() {
+		m.gasTimeWallTimeGap.Set(math.NaN())
+	} else {
+		m.gasTimeWallTimeGap.Set(gasClock.Sub(byWall).Seconds())
+	}
 
 	m.worstCaseBaseFee.Set(block.WorstCaseBaseFee().Float64())
 	m.executedBaseFee.Set(block.ExecutedBaseFee().Float64())
@@ -195,6 +252,60 @@ func (m *metrics) setExecuted(block *blocks.Block) {
 	m.gasTarget.Set(float64(gasTime.Target()))
 }
 
-func (m *metrics) observeExecuteDuration(d time.Duration) {
-	m.executeBlockDuration.Observe(d.Seconds())
+func (m *metrics) observeExecuteDuration(start, end time.Time, b *blocks.Block, res *ExecutionResults) {
+	m.executeBlockDuration.Observe(end.Sub(start).Seconds())
+
+	if !b.Synchronous() {
+		m.averageExecutedGasCharged.observe(executionSpan{
+			start:    start,
+			end:      end,
+			executed: res.GasExecuted,
+			rate:     res.rate,
+		})
+	}
+}
+
+type executionSpan struct {
+	start, end     time.Time
+	executed, rate gas.Gas
+}
+
+func (r *rollingGasThroughput) observe(s executionSpan) {
+	r.history.PushRight(s)
+	r.total.gas += s.executed
+	r.total.wallTime += s.wallTime()
+	r.total.gasTime += s.gasTime()
+
+	// The observation pushed above can never be evicted so peeking will never
+	// fail. Observations that straddle the [saeparams.Tau] window are retained,
+	// whole, for simplicity.
+	for cutoff := s.end.Add(-saeparams.Tau); ; {
+		old, _ := r.history.PeekLeft()
+		if old.end.After(cutoff) {
+			break
+		}
+		r.history.PopLeft()
+		r.total.gas -= old.executed
+		r.total.wallTime -= old.wallTime()
+		r.total.gasTime -= old.gasTime()
+	}
+
+	headroom := float64(r.total.gasTime) / float64(r.total.wallTime)
+	r.headroom.Observe(headroom)
+	r.latestHeadroom.Set(headroom)
+	r.gasPerSecond.Set(float64(r.total.gas) / r.total.wallTime.Seconds())
+}
+
+func (s *executionSpan) gasTime() time.Duration {
+	// See nosec rationale for why we ignore the (impossible) overflow error.
+	ns, _, _ := intmath.MulDiv(
+		s.executed,                           // gas
+		gas.Gas(time.Second/time.Nanosecond), // ns/s
+		s.rate,                               // gas/s
+	)
+	return time.Duration(ns) //#nosec G115 -- Known to be O(seconds) so won't overflow int64
+}
+
+func (s *executionSpan) wallTime() time.Duration {
+	return s.end.Sub(s.start)
 }

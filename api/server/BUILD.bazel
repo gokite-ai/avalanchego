@@ -33,6 +33,7 @@ go_test(
     name = "server_test",
     srcs = [
         "allowed_hosts_test.go",
+        "kite_alias_test.go",
         "router_test.go",
         "server_test.go",
     ],
@@ -40,6 +41,8 @@ go_test(
     deps = [
         "//snow",
         "//snow/snowtest",
+        "//utils/logging",
+        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_stretchr_testify//require",
     ],
 )

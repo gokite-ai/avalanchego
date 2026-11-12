@@ -1,0 +1,7 @@
+.git
+.github
+build
+**/build
+**/.git
+**/node_modules
+*.md
