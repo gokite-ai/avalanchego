@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"time"
 
 	"github.com/ava-labs/libevm/accounts"
@@ -68,9 +69,10 @@ type Config struct {
 
 	// Resource limits
 	BlocksPerBloomSection uint64
-	EVMTimeout            time.Duration
+	CallTimeout           time.Duration // per call or batch; 0 = no limit
 	GasCap                uint64
 	BatchRequestLimit     uint64 // 0 = no limit
+	MaxBlocksPerRequest   uint64 // maximum number of blocks per eth_getLogs request; 0 = no limit
 
 	// Transaction submission
 	TxFeeCap            float64 // 0 = no cap
@@ -119,6 +121,7 @@ func New(chain Chain, config Config) (*Provider, error) {
 		return nil, fmt.Errorf("gasprice.NewEstimator(...): %v", err)
 	}
 
+	replaySlots := max(1, runtime.GOMAXPROCS(0)-1)
 	chainIdx := chainIndexer{chain}
 	override := bloomOverrider{chain}
 
@@ -133,6 +136,7 @@ func New(chain Chain, config Config) (*Provider, error) {
 		chain.Mempool(),
 		chainIdx,
 		override,
+		make(chan struct{}, replaySlots),
 		newBloomIndexer(
 			// TODO(alarso16): if we are state syncing, we need to provide the
 			// first block available to the indexer via
@@ -145,7 +149,7 @@ func New(chain Chain, config Config) (*Provider, error) {
 	}
 
 	filter := filters.NewFilterAPI(
-		filters.NewFilterSystem(back, filters.Config{}),
+		filters.NewFilterSystem(filterBackend{back}, filters.Config{}),
 		false, /*isLightClient*/
 	)
 	srv, err := back.server(filter)

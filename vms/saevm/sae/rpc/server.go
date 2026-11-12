@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/ava-labs/libevm/eth/filters"
 	"github.com/ava-labs/libevm/libevm/debug"
@@ -19,8 +20,11 @@ import (
 	"github.com/ava-labs/avalanchego/utils/set"
 )
 
-// Taken as the default from geth / libevm's `node.DefaultConfig`.
-const batchResponseMaxSize = 25 * 1000 * 1000 // 25 MB
+// JSON-RPC namespaces shared by more than one [apiService].
+const (
+	ethNamespace   = "eth"
+	debugNamespace = "debug"
+)
 
 // An API is a named group of JSON-RPC methods that a node MAY serve, see
 // [Config.APIs]. Groups can't align with the JSON-RPC namespaces for security
@@ -37,6 +41,8 @@ const (
 	APIChain        API = "chain"
 	APITx           API = "tx"
 	APISubscription API = "subscription"
+	APIFilter       API = "filter"
+	APILogs         API = "logs"
 	APIAvalanche    API = "avalanche"
 	APIDB           API = "db"
 	APIProfile      API = "profile"
@@ -110,7 +116,7 @@ var apiServices = []apiService{
 		// - eth_maxPriorityFeePerGas
 		// - eth_feeHistory
 		// - eth_syncing
-		name: APIPrice, namespace: "eth", defaultOn: true,
+		name: APIPrice, namespace: ethNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any { return ethapi.NewEthereumAPI(b) },
 	},
 	{
@@ -137,7 +143,7 @@ var apiServices = []apiService{
 		//
 		// Undocumented APIs:
 		// - eth_getBlockReceipts
-		name: APIChain, namespace: "eth", defaultOn: true,
+		name: APIChain, namespace: ethNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any {
 			return &blockChainAPI{ethapi.NewBlockChainAPI(b), b}
 		},
@@ -163,35 +169,43 @@ var apiServices = []apiService{
 		// - eth_getRawTransactionByHash
 		// - eth_pendingTransactions
 		// - eth_resend
-		name: APITx, namespace: "eth", defaultOn: true,
+		name: APITx, namespace: ethNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any {
 			return immediateReceipts{b.RecentReceipt, ethapi.NewTransactionAPI(b, new(ethapi.AddrLocker))}
 		},
 	},
 	{
-		// Standard Ethereum node APIS:
-		// - eth_getFilterChanges
-		// - eth_getFilterLogs
-		// - eth_getLogs
-		// - eth_newBlockFilter
-		// - eth_newFilter
-		// - eth_newPendingTransactionFilter
-		// - eth_uninstallFilter
-		//
 		// geth-specific APIs:
 		// - eth_subscribe
 		//  - newHeads
 		//  - newPendingTransactions
 		//  - logs
-		name: APISubscription, namespace: "eth", defaultOn: true,
-		receiver: func(_ *backend, filter *filters.FilterAPI) any { return filter },
+		name: APISubscription, namespace: ethNamespace, defaultOn: true,
+		receiver: func(_ *backend, filter *filters.FilterAPI) any { return &subscriptionAPI{filter} },
 	},
 	{
 		// Avalanche-custom eth extensions:
 		// - eth_subscribe
 		//  - newAcceptedTransactions
-		name: APISubscription, namespace: "eth", defaultOn: true,
+		name: APISubscription, namespace: ethNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any { return &customSubscriptionAPI{b} },
+	},
+	{
+		// Standard Ethereum node APIs:
+		// - eth_getFilterChanges
+		// - eth_getFilterLogs
+		// - eth_newBlockFilter
+		// - eth_newFilter
+		// - eth_newPendingTransactionFilter
+		// - eth_uninstallFilter
+		name: APIFilter, namespace: ethNamespace, defaultOn: true,
+		receiver: func(_ *backend, filter *filters.FilterAPI) any { return &pollingFilterAPI{filter} },
+	},
+	{
+		// Standard Ethereum node APIs:
+		// - eth_getLogs
+		name: APILogs, namespace: ethNamespace, defaultOn: true,
+		receiver: func(b *backend, filter *filters.FilterAPI) any { return &logsAPI{filter, b} },
 	},
 	{
 		// Avalanche-custom eth extensions:
@@ -199,7 +213,7 @@ var apiServices = []apiService{
 		// - eth_callDetailed
 		// - eth_getChainConfig
 		// - eth_suggestPriceOptions
-		name: APIAvalanche, namespace: "eth", defaultOn: true,
+		name: APIAvalanche, namespace: ethNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any { return &customAPI{b} },
 	},
 	{
@@ -215,7 +229,7 @@ var apiServices = []apiService{
 		// - debug_getRawTransaction
 		// - debug_printBlock
 		// - debug_setHead          (no-op, logs info)
-		name: APIDB, namespace: "debug", // raw database access
+		name: APIDB, namespace: debugNamespace, // raw database access
 		receiver: func(b *backend, _ *filters.FilterAPI) any { return ethapi.NewDebugAPI(b) },
 	},
 	{
@@ -240,7 +254,7 @@ var apiServices = []apiService{
 		// - debug_writeBlockProfile
 		// - debug_writeMemProfile
 		// - debug_writeMutexProfile
-		name: APIProfile, namespace: "debug", // process introspection
+		name: APIProfile, namespace: debugNamespace, // process introspection
 		receiver: func(*backend, *filters.FilterAPI) any { return debug.Handler },
 	},
 	{
@@ -257,20 +271,30 @@ var apiServices = []apiService{
 		// - debug_subscribe
 		//  - traceChain // TODO(JonathanOppenheimer): test this RPC
 		// - debug_traceTransaction
-		name: APITrace, namespace: "debug", defaultOn: true,
+		name: APITrace, namespace: debugNamespace, defaultOn: true,
 		receiver: func(b *backend, _ *filters.FilterAPI) any { return newTracerAPI(b) },
 	},
 }
 
-// Server returns the Provider's [rpc.Server], with the JSON-RPC namespace
-// handlers for every enabled [API] registered.
-func (p *Provider) Server() *rpc.Server {
-	return p.server
+// HTTPHandler returns the handler for JSON-RPC over HTTP, serving every enabled
+// [API] with per-request response headers added.
+func (p *Provider) HTTPHandler() http.Handler {
+	return withResponseHeaders(p.server)
+}
+
+// WebsocketHandler returns the handler for JSON-RPC over websockets, serving
+// every enabled [API] to connections from allowedOrigins.
+func (p *Provider) WebsocketHandler(allowedOrigins []string) http.Handler {
+	return p.server.WebsocketHandler(allowedOrigins)
 }
 
 func (b *backend) server(filter *filters.FilterAPI) (*rpc.Server, error) {
+	// Taken as the default from geth / libevm's `node.DefaultConfig`.
+	const batchResponseMaxSize = 25 * 1000 * 1000 // 25 MB
+
 	s := rpc.NewServer()
 	s.SetBatchLimits(int(b.config.BatchRequestLimit), batchResponseMaxSize) // #nosec G115 -- [Config.Verify], bounds-checks against math.MaxInt
+	s.SetCallTimeout(b.config.CallTimeout)
 	for _, svc := range apiServices {
 		if !b.config.APIs.Contains(svc.name) {
 			continue

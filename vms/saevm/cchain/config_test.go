@@ -71,24 +71,24 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "block_building/min_price_target",
 			json: `{"min-price-target":1000}`,
-			want: with(func(c *config) { c.PriceTarget = utils.PointerTo(gas.Price(1000)) }),
+			want: with(func(c *config) { c.PriceTarget = new(gas.Price(1000)) }),
 		},
 		{
 			// An explicit 0 is a vote for the minimum, distinct from an absent
 			// field, which is no vote.
 			name: "block_building/min_price_target_explicit_zero",
 			json: `{"min-price-target":0}`,
-			want: with(func(c *config) { c.PriceTarget = utils.PointerTo(gas.Price(0)) }),
+			want: with(func(c *config) { c.PriceTarget = new(gas.Price) }),
 		},
 		{
 			name: "block_building/gas_target",
 			json: `{"gas-target":1000}`,
-			want: with(func(c *config) { c.GasTarget = utils.PointerTo(gas.Gas(1000)) }),
+			want: with(func(c *config) { c.GasTarget = new(gas.Gas(1000)) }),
 		},
 		{
 			name: "block_building/min_delay_target",
 			json: `{"min-delay-target":2000}`,
-			want: with(func(c *config) { c.MinDelayTarget = utils.PointerTo[uint64](2000) }),
+			want: with(func(c *config) { c.MinDelayTarget = new(uint64(2000)) }),
 		},
 
 		// State & trie
@@ -176,6 +176,11 @@ func TestParseConfig(t *testing.T) {
 			name: "api/allow_unprotected_txs",
 			json: `{"allow-unprotected-txs":true}`,
 			want: with(func(c *config) { c.AllowUnprotectedTxs = true }),
+		},
+		{
+			name: "api/max_blocks_per_request",
+			json: `{"api-max-blocks-per-request":2000}`,
+			want: with(func(c *config) { c.MaxBlocksPerRequest = 2000 }),
 		},
 		{
 			name: "api/batch_request_limit",
@@ -273,6 +278,7 @@ func TestParseConfig(t *testing.T) {
 				"tx-pool-global-slots":2048,
 				"apis":["chain","trace"],
 				"allow-unprotected-txs":true,
+				"api-max-blocks-per-request":2000,
 				"batch-request-limit":50,
 				"api-max-duration":"30s",
 				"state-sync-enabled":false,
@@ -281,9 +287,9 @@ func TestParseConfig(t *testing.T) {
 				"state-sync-ids":["` + nodeID.String() + `"]
 			}`,
 			want: config{
-				PriceTarget:                  utils.PointerTo(gas.Price(500)),
-				GasTarget:                    utils.PointerTo(gas.Gas(1500)),
-				MinDelayTarget:               utils.PointerTo[uint64](3000),
+				PriceTarget:                  new(gas.Price(500)),
+				GasTarget:                    new(gas.Gas(1500)),
+				MinDelayTarget:               new(uint64(3000)),
 				Pruning:                      false,
 				StateScheme:                  customrawdb.FirewoodScheme,
 				CommitInterval:               256,
@@ -295,6 +301,7 @@ func TestParseConfig(t *testing.T) {
 				TxPoolGlobalSlots:            2048,
 				APIs:                         set.Of(rpc.APIChain, rpc.APITrace),
 				AllowUnprotectedTxs:          true,
+				MaxBlocksPerRequest:          2000,
 				BatchRequestLimit:            50,
 				APIMaxDuration:               duration{30 * time.Second},
 				WarpOffChainMessages:         []hexutil.Bytes{{0x12, 0x34}},

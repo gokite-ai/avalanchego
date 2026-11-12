@@ -6,26 +6,15 @@ package utils
 import (
 	"math/big"
 	"time"
-
-	"github.com/ava-labs/avalanchego/utils"
 )
 
 func TimeToNewUint64(time time.Time) *uint64 {
-	return utils.PointerTo(uint64(time.Unix()))
+	return PointerTo(uint64(time.Unix()))
 }
 
 func Uint64ToTime(val *uint64) time.Time {
 	timestamp := int64(*val)
 	return time.Unix(timestamp, 0)
-}
-
-// Uint64PtrEqual returns true if x and y pointers are equivalent ie. both nil or both
-// contain the same value.
-func Uint64PtrEqual(x, y *uint64) bool {
-	if x == nil || y == nil {
-		return x == y
-	}
-	return *x == *y
 }
 
 // BigEqual returns true if a is equal to b. If a and b are nil, it returns

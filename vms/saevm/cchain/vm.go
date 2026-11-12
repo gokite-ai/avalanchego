@@ -20,13 +20,13 @@ import (
 
 	"github.com/ava-labs/avalanchego/api"
 	"github.com/ava-labs/avalanchego/database/prefixdb"
-	"github.com/ava-labs/avalanchego/graft/evm/utils/rpc"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/network/p2p"
 	"github.com/ava-labs/avalanchego/network/p2p/gossip"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/bloom"
+	"github.com/ava-labs/avalanchego/utils/rpc"
 	"github.com/ava-labs/avalanchego/vms/evm/sync/customrawdb"
 	"github.com/ava-labs/avalanchego/vms/saevm/adaptor"
 	"github.com/ava-labs/avalanchego/vms/saevm/blocks"
@@ -159,9 +159,8 @@ func (vm *VM) Initialize(
 		return fmt.Errorf("creating network: %w", err)
 	}
 
-	// [prefixdb.NewNested] is used because coreth used to be run as a plugin.
-	// This meant that the database's prefix was not compacted, because the
-	// provided database was wrapped by the rpcchainvm.
+	// The use of [prefixdb.NewNested] rather than [prefixdb.New] is part of the
+	// on-disk format and MUST NOT change.
 	ethDB := types.NewEthDB(prefixdb.NewNested(ethDBPrefix, avaDB))
 
 	if err := genesis.verifyAndWriteBlock(ethDB); err != nil {
@@ -256,7 +255,7 @@ func (vm *VM) Initialize(
 			if err != nil {
 				return fmt.Errorf("creating SAE handlers: %w", err)
 			}
-			service, err := newService(snowCtx, vm.gossipSet, pushGossiper, vm.state)
+			service, err := newService(snowCtx, vm.gossipSet, pushGossiper, vm.state, vm.VM)
 			if err != nil {
 				return fmt.Errorf("creating avax service: %w", err)
 			}
@@ -359,6 +358,7 @@ var (
 )
 
 type stateDependent interface {
+	HealthCheck(context.Context) (any, error)
 	ParseBlock(context.Context, []byte) (*blocks.Block, error)
 	GetBlock(context.Context, ids.ID) (*blocks.Block, error)
 	GetBlockIDAtHeight(context.Context, uint64) (ids.ID, error)
@@ -370,6 +370,11 @@ func (vm *VM) activeHandler() stateDependent {
 		return vm.VM
 	}
 	return vm.Handler
+}
+
+// HealthCheck returns the current health status of the VM.
+func (vm *VM) HealthCheck(ctx context.Context) (any, error) {
+	return vm.activeHandler().HealthCheck(ctx)
 }
 
 // ParseBlock parses a block from bytes.
