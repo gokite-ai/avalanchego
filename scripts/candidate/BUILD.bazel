@@ -1,0 +1,19 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "candidate_lib",
+    srcs = ["handshake.go"],
+    importpath = "github.com/ava-labs/avalanchego/scripts/candidate",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//utils/logging",
+        "//version",
+        "//vms/rpcchainvm/runtime/subprocess",
+    ],
+)
+
+go_binary(
+    name = "candidate",
+    embed = [":candidate_lib"],
+    visibility = ["//visibility:public"],
+)
