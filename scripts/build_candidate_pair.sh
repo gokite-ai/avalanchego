@@ -40,7 +40,7 @@ IMAGE="qa53-candidate:$SOURCE_COMMIT"
   -f Dockerfile.candidate -t "$IMAGE" .
 RUN=("${DOCKER[@]}" run --rm --platform linux/amd64 --network none --read-only
      --cap-drop ALL --security-opt no-new-privileges --memory 512m --cpus 1 --pids-limit 64
-     --tmpfs /tmp:rw,noexec,nosuid,size=16m)
+     --tmpfs '/tmp:rw,noexec,nosuid,size=16m')
 "${RUN[@]}" "$IMAGE" --version > "$OUTPUT_DIR/node-version.txt"
 "${RUN[@]}" --entrypoint /plugins-template/subnet-evm "$IMAGE" --version > "$OUTPUT_DIR/plugin-version.txt"
 "${RUN[@]}" --entrypoint /usr/local/bin/candidate-handshake "$IMAGE" /plugins-template/subnet-evm > "$OUTPUT_DIR/handshake.txt"

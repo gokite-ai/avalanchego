@@ -10,7 +10,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-go-for-project
-      - uses: docker/setup-buildx-action@v3
       - name: Build the exact checked-out node and plugin together
         env:
           CANDIDATE_EVIDENCE_DIR: ${{ runner.temp }}/candidate-evidence
