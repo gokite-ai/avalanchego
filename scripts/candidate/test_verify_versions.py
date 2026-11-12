@@ -17,6 +17,10 @@ class CandidateEvidenceTests(unittest.TestCase):
             (COMMIT, NODE, PLUGIN.replace("=47", "=46"), HANDSHAKE),
             (COMMIT, NODE.replace("1.15.3", "1.15.1"), PLUGIN, HANDSHAKE),
             (COMMIT, NODE, PLUGIN, ""),
+            (COMMIT, PLUGIN, NODE, HANDSHAKE),
+            (COMMIT, NODE.replace("1.15.3 ", "1.15.3-rc1 "), PLUGIN, HANDSHAKE),
+            (COMMIT, NODE, PLUGIN, "FAIL: " + HANDSHAKE),
+            (COMMIT, NODE, PLUGIN.replace(COMMIT, COMMIT + "f"), HANDSHAKE),
         ):
             with self.subTest(args=args):
                 with self.assertRaises(ValueError):

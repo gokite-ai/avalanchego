@@ -7,14 +7,15 @@ from pathlib import Path
 def verify(commit, node, plugin, handshake):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Expected a full source commit")
-    for name, output in (("node", node), ("plugin", plugin)):
-        if commit not in output:
-            raise ValueError(f"{name}: wrong source commit")
-        if not re.search(r"(?:avalanchego/|Subnet-EVM/v)1\.15\.3\b", output):
-            raise ValueError(f"{name}: expected version 1.15.3")
-        if not re.search(r"rpcchainvm[= :]+47\b", output):
-            raise ValueError(f"{name}: expected RPCChainVM protocol 47")
-    if "PASS: actual Subnet-EVM subprocess handshake; rpcchainvm=47" not in handshake:
+    node_format = (
+        rf"avalanchego/1\.15\.3 \[database=[^,\]\s]+, rpcchainvm=47, "
+        rf"commit={commit}(?:, go=[^,\]\s]+)?\]"
+    )
+    if not re.fullmatch(node_format, node.strip()):
+        raise ValueError("Unexpected AvalancheGo version, commit or protocol")
+    if plugin.strip() != f"Subnet-EVM/v1.15.3@{commit} [rpcchainvm=47]":
+        raise ValueError("Unexpected Subnet-EVM version, commit or protocol")
+    if handshake.strip() != "PASS: actual Subnet-EVM subprocess handshake; rpcchainvm=47":
         raise ValueError("Real subprocess handshake did not pass")
     return {"source_commit": commit, "platform": "linux/amd64",
             "version": "1.15.3", "rpcchainvm": 47, "handshake": "passed",
